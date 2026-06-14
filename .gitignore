@@ -1,0 +1,20 @@
+# PocketBase binary
+pocketbase
+
+# PocketBase data (SQLite + uploads)
+pb_data/
+
+# Environment files
+.env
+.env.*
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+.zed/
