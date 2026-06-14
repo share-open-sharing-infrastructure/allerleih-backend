@@ -1,6 +1,6 @@
 # allerleih-backend
 
-PocketBase backend for [AllerLeih](https://menkent.uber.space/) — the sharing/lending platform.
+PocketBase backend for [AllerLeih](allerleih.org) — the sharing/lending platform.
 
 ## Architecture
 
@@ -63,19 +63,10 @@ On first run, visit the admin UI at `http://127.0.0.1:8090/_/` to create your su
 │   └── views/                 # HTML templates (emails, pages)
 │       ├── layout.html        # Base HTML email layout
 │       └── mail/              # Email templates
-└── pb_migrations/             # Schema migrations (auto-applied)
-    ├── 1700000001_updated_users.js
-    ├── 1700000002_created_items.js
-    ├── 1700000003_created_conversations.js
-    ├── 1700000004_created_messages.js
-    ├── 1700000005_created_notifications.js
-    ├── 1700000006_created_push_subscriptions.js
-    ├── 1700000007_created_feedback.js
-    ├── 1700000008_created_lending_terms.js
-    ├── 1700000009_created_term_acceptances.js
-    ├── 1700000010_created_outbound_clicks.js
-    ├── 1700000011_created_searches.js
-    └── 1700000012_created_items_public_view.js
+└── pb_migrations/             # Schema migrations (exported from live instance)
+    ├── 1760188516_deleted_users.js    (earliest)
+    ├── ...                            (168 migration files total)
+    └── 1781095535_updated_users.js    (latest)
 ```
 
 ## Hooks Architecture
@@ -141,41 +132,16 @@ podman build -t allerleih-backend .
 podman run -d -p 8090:8090 -v pb_data:/pb/pb_data allerleih-backend
 ```
 
-## Replacing Migrations with Live Schema Export
+## Syncing Migrations from Production
 
-The migration files in this repo were generated from TypeScript type definitions. To replace them with the actual live schema:
-
-### Option A: Use PocketBase CLI (recommended)
+When schema changes are made via the PocketBase admin dashboard on the live server, new migration files are auto-generated. Sync them into this repo:
 
 ```bash
-# SSH into the production server
-ssh menkent@menkent.uber.space
-
-# Navigate to PocketBase directory
-cd ~/pocketbase
-
-# Export current schema as migrations
-./pocketbase migrate collections
-
-# Copy the generated files to your local repo
-# (from your local machine)
-scp menkent@menkent.uber.space:~/pocketbase/pb_migrations/* ./pb_migrations/
+# SSH into the production server and copy new migrations
+scp -r menkent@menkent.uber.space:~/path-to-pocketbase/pb_migrations/* ./pb_migrations/
 ```
 
-### Option B: Use Admin API
-
-```bash
-# Get auth token
-TOKEN=$(curl -s -X POST https://pocketbase.menkent.uber.space/api/collections/_superusers/auth-with-password \
-  -H "Content-Type: application/json" \
-  -d '{"identity":"YOUR_EMAIL","password":"YOUR_PASSWORD"}' | jq -r '.token')
-
-# Export all collections
-curl -s https://pocketbase.menkent.uber.space/api/collections \
-  -H "Authorization: $TOKEN" > schema.json
-```
-
-Then convert `schema.json` into individual migration files.
+Then commit the new migration files to this repo.
 
 ## Related
 
