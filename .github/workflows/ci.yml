@@ -51,7 +51,7 @@ jobs:
         run: |
           ssh -p "${{ vars.UBERSPACE_SSH_PORT || 22 }}" \
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
-            "mkdir -p ~/bin ~/pocketbase/pb_data ~/pocketbase/pb_hooks ~/pocketbase/pb_migrations ~/pocketbase/scripts"
+            "mkdir -p ~/bin ~/pocketbase/pb_data ~/pocketbase/pb_hooks ~/pocketbase/pb_migrations ~/pocketbase/pb_public ~/pocketbase/scripts"
 
       # ── 6. Stop running PocketBase instance (if any) ────────────────────────
       - name: Stop PocketBase service
@@ -83,6 +83,17 @@ jobs:
           rsync -avz --delete -e "ssh -p ${{ vars.UBERSPACE_SSH_PORT || 22 }}" \
             pb_migrations/ \
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/pocketbase/pb_migrations/"
+
+      # ── 9b. Sync pb_public ───────────────────────────────────────────────────
+      - name: Sync pb_public
+        run: |
+          if [ -d "pb_public" ]; then
+            rsync -avz --delete -e "ssh -p ${{ vars.UBERSPACE_SSH_PORT || 22 }}" \
+              pb_public/ \
+              "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/pocketbase/pb_public/"
+          else
+            echo "No pb_public/ directory found, skipping."
+          fi
 
       # ── 10. Sync scripts ─────────────────────────────────────────────────────
       - name: Sync scripts

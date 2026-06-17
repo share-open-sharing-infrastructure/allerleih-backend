@@ -16,9 +16,11 @@
  * @param {string} options.body - HTML content to inject into the layout template
  */
 function sendNotificationEmail(app, { to, subject, body }) {
+    const appUrl = app.settings().meta.appURL || ''
+
     const html = $template
         .loadFiles(`${__hooks}/views/layout.html`)
-        .render({ CONTENT: body })
+        .render({ CONTENT: body, APP_URL: appUrl })
 
     const message = new MailerMessage({
         from: {

@@ -61,7 +61,7 @@ onRecordAfterCreateSuccess((e) => {
         const recipient = $app.findRecordById('users', recipientId)
         const sender = $app.findRecordById('users', senderId)
         const recipientEmail = recipient.email()
-        const recipientName = recipient.get('name') || 'Nutzer/in'
+        const recipientName = recipient.get('name') || 'Nutzer:in'
         const senderName = sender.get('name') || 'Jemand'
 
         if (!recipientEmail) {
