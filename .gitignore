@@ -7,6 +7,7 @@ pb_data/
 # Environment files
 .env
 .env.*
+env
 
 # Node
 node_modules/

@@ -16,13 +16,13 @@ This project uses PocketBase's **"Zero-Go, JavaScript Hooks"** approach:
 
 ```bash
 # macOS (Apple Silicon)
-wget https://github.com/pocketbase/pocketbase/releases/download/v0.39.3/pocketbase_0.39.3_darwin_arm64.zip
-unzip pocketbase_0.39.3_darwin_arm64.zip
+wget https://github.com/pocketbase/pocketbase/releases/download/v{VERSION}/pocketbase_{VERSION}_darwin_arm64.zip
+unzip pocketbase_{VERSION}_darwin_arm64.zip
 chmod +x pocketbase
 
 # Or Linux (amd64)
-wget https://github.com/pocketbase/pocketbase/releases/download/v0.39.3/pocketbase_0.39.3_linux_amd64.zip
-unzip pocketbase_0.39.3_linux_amd64.zip
+wget https://github.com/pocketbase/pocketbase/releases/download/v{VERSION/pocketbase_{VERSION}_linux_amd64.zip
+unzip pocketbase_{VERSION}_linux_amd64.zip
 chmod +x pocketbase
 ```
 
@@ -65,17 +65,10 @@ npm run dev
 
 The frontend will now use your local PocketBase instance. Register a new user through the UI or create test data via the admin dashboard.
 
-> **Note:** Remember to restore the production URLs when done:
-> ```env
-> PB_URL="https://pocketbase.menkent.uber.space/"
-> PUBLIC_PB_URL="https://pocketbase.menkent.uber.space/"
-> ```
-
 ## Project Structure
 
 ```
 .
-├── Containerfile              # Container build for deployment
 ├── package.json               # Prettier config only
 ├── pb_hooks/                  # Server-side JavaScript hooks
 │   ├── main.pb.js             # Bootstrap + log interception
@@ -96,69 +89,6 @@ The frontend will now use your local PocketBase instance. Register a new user th
     └── 1781551136_collections_snapshot.js   # Full schema snapshot (19 collections)
 ```
 
-## Hooks Architecture
-
-Hook files (`*.pb.js`) are auto-loaded by PocketBase. They follow this pattern:
-
-| Layer | Directory | Purpose |
-|-------|-----------|---------|
-| Registration | `pb_hooks/*.pb.js` | Hook/route/cron registration (thin controllers) |
-| Services | `pb_hooks/services/` | Business logic (validation, side effects) |
-| Routes | `pb_hooks/routes/` | Custom API endpoint handlers |
-| Jobs | `pb_hooks/jobs/` | Scheduled task implementations |
-| Utils | `pb_hooks/utils/` | Shared helpers (DB transactions, formatting) |
-| Views | `pb_hooks/views/` | HTML templates for emails |
-
-### Hook Types Available
-
-```javascript
-// Record lifecycle hooks
-onRecordCreateExecute((e) => { ... }, 'collection_name')
-onRecordUpdateExecute((e) => { ... }, 'collection_name')
-onRecordDeleteExecute((e) => { ... }, 'collection_name')
-
-// After-success hooks (for side effects like notifications)
-onRecordAfterCreateSuccess((e) => { ... }, 'collection_name')
-onRecordAfterUpdateSuccess((e) => { ... }, 'collection_name')
-
-// Request validation hooks
-onRecordCreateRequest((e) => { ... }, 'collection_name')
-onRecordUpdateRequest((e) => { ... }, 'collection_name')
-
-// Custom API routes
-routerAdd('GET', '/api/custom-endpoint', (e) => { ... })
-
-// Cron jobs
-cronAdd('job_name', '0 3 * * *', () => { ... })
-```
-
-### Module System
-
-Uses CommonJS with PocketBase's `${__hooks}` path variable:
-
-```javascript
-const { LOG_LEVEL } = require(`${__hooks}/constants.js`)
-const { wrapTransactional } = require(`${__hooks}/utils/db.js`)
-const { createNotification } = require(`${__hooks}/services/notification.js`)
-```
-
-## Environment Variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `LOG_LEVEL` | `4` | Console log verbosity (1=DEBUG, 4=ERROR) |
-| `DRY_MODE` | `false` | Disable side effects (emails, push) |
-| `VAPID_PUBLIC_KEY` | `''` | Web Push VAPID public key |
-| `VAPID_PRIVATE_KEY` | `''` | Web Push VAPID private key |
-| `VAPID_SUBJECT` | `mailto:allerleih@posteo.de` | VAPID subject |
-
-## Deployment (Container)
-
-```bash
-podman build -t allerleih-backend .
-podman run -d -p 8090:8090 -v pb_data:/pb/pb_data allerleih-backend
-```
-
 ## Syncing Migrations from Production
 
 When schema changes are made via the PocketBase admin dashboard on the live server, re-export the collections snapshot:
@@ -173,4 +103,3 @@ This generates a new `*_collections_snapshot.js` in `pb_migrations/`. Copy it to
 ## Related
 
 - **Frontend**: [share](../share) — SvelteKit frontend
-- **Reference**: [leihbackend_AL](../leihbackend_AL) — Similar PocketBase backend for leih.lokal
