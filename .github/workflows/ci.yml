@@ -51,7 +51,7 @@ jobs:
         run: |
           ssh -p "${{ vars.UBERSPACE_SSH_PORT || 22 }}" \
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
-            "mkdir -p ~/pocketbase/pb_data ~/pocketbase/pb_hooks ~/pocketbase/pb_migrations ~/pocketbase/scripts"
+            "mkdir -p ~/bin ~/pocketbase/pb_data ~/pocketbase/pb_hooks ~/pocketbase/pb_migrations ~/pocketbase/scripts"
 
       # ── 6. Stop running PocketBase instance (if any) ────────────────────────
       - name: Stop PocketBase service
@@ -65,10 +65,10 @@ jobs:
         run: |
           rsync -avz --checksum -e "ssh -p ${{ vars.UBERSPACE_SSH_PORT || 22 }}" \
             pocketbase \
-            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/pocketbase/pocketbase"
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:~/bin/pocketbase"
           ssh -p "${{ vars.UBERSPACE_SSH_PORT || 22 }}" \
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
-            "chmod +x ~/pocketbase/pocketbase"
+            "chmod +x ~/bin/pocketbase"
 
       # ── 8. Sync pb_hooks ─────────────────────────────────────────────────────
       - name: Sync pb_hooks
@@ -103,33 +103,24 @@ jobs:
         run: |
           ssh -p "${{ vars.UBERSPACE_SSH_PORT || 22 }}" \
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << 'EOF'
-          CONF_DIR=~/.config/supervisord/conf.d
+          CONF_DIR=~/etc/services.d
           mkdir -p "$CONF_DIR"
 
           # Only write the config if it doesn't already exist
-          if [ ! -f "$CONF_DIR/pocketbase.conf" ]; then
-            cat > "$CONF_DIR/pocketbase.conf" << 'CONF'
+          if [ ! -f "$CONF_DIR/pocketbase.ini" ]; then
+            cat > "$CONF_DIR/pocketbase.ini" << 'CONF'
           [program:pocketbase]
-          command=%(ENV_HOME)s/pocketbase/pocketbase serve --http=127.0.0.1:%(ENV_PB_PORT)s
           directory=%(ENV_HOME)s/pocketbase
+          command=pocketbase serve --http :8090
           autostart=yes
           autorestart=yes
-          startsecs=5
-          startretries=3
-          stdout_logfile=%(ENV_HOME)s/logs/pocketbase.log
-          stdout_logfile_maxbytes=10MB
-          stdout_logfile_backups=3
-          stderr_logfile=%(ENV_HOME)s/logs/pocketbase_error.log
-          stderr_logfile_maxbytes=10MB
-          stderr_logfile_backups=3
-          environment=PB_PORT="8090"
+          startsecs=60
           CONF
             echo "supervisord config written."
           else
             echo "supervisord config already exists, skipping."
           fi
 
-          mkdir -p ~/logs
           supervisorctl reread
           supervisorctl update
           EOF
@@ -158,7 +149,7 @@ jobs:
           done
           echo "PocketBase did not become healthy in time"
           supervisorctl status pocketbase
-          tail -n 50 ~/logs/pocketbase_error.log || true
+          supervisorctl tail pocketbase stderr 2>/dev/null || true
           exit 1
           EOF
 
