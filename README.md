@@ -1,6 +1,6 @@
 # allerleih-backend
 
-PocketBase backend for [AllerLeih](allerleih.org) — the sharing/lending platform.
+PocketBase backend for [AllerLeih](https://allerleih.org) — the sharing/lending platform.
 
 ## Architecture
 
@@ -16,13 +16,13 @@ This project uses PocketBase's **"Zero-Go, JavaScript Hooks"** approach:
 
 ```bash
 # macOS (Apple Silicon)
-wget https://github.com/pocketbase/pocketbase/releases/download/v0.26.6/pocketbase_0.26.6_darwin_arm64.zip
-unzip pocketbase_0.26.6_darwin_arm64.zip
+wget https://github.com/pocketbase/pocketbase/releases/download/v0.39.3/pocketbase_0.39.3_darwin_arm64.zip
+unzip pocketbase_0.39.3_darwin_arm64.zip
 chmod +x pocketbase
 
 # Or Linux (amd64)
-wget https://github.com/pocketbase/pocketbase/releases/download/v0.26.6/pocketbase_0.26.6_linux_amd64.zip
-unzip pocketbase_0.26.6_linux_amd64.zip
+wget https://github.com/pocketbase/pocketbase/releases/download/v0.39.3/pocketbase_0.39.3_linux_amd64.zip
+unzip pocketbase_0.39.3_linux_amd64.zip
 chmod +x pocketbase
 ```
 
@@ -41,7 +41,35 @@ PocketBase will:
 
 ### 3. Create a superuser
 
-On first run, visit the admin UI at `http://127.0.0.1:8090/_/` to create your superuser account.
+```bash
+./pocketbase superuser upsert YOUR_EMAIL YOUR_PASSWORD
+```
+
+Or visit the admin UI at `http://127.0.0.1:8090/_/` on first run.
+
+### 4. Connect the SvelteKit frontend
+
+In the `share` repo, update `.env` to point at the local backend:
+
+```env
+PB_URL="http://127.0.0.1:8090/"
+PUBLIC_PB_URL="http://127.0.0.1:8090/"
+```
+
+Then start the frontend:
+
+```bash
+cd ../share
+npm run dev
+```
+
+The frontend will now use your local PocketBase instance. Register a new user through the UI or create test data via the admin dashboard.
+
+> **Note:** Remember to restore the production URLs when done:
+> ```env
+> PB_URL="https://pocketbase.menkent.uber.space/"
+> PUBLIC_PB_URL="https://pocketbase.menkent.uber.space/"
+> ```
 
 ## Project Structure
 
@@ -63,10 +91,9 @@ On first run, visit the admin UI at `http://127.0.0.1:8090/_/` to create your su
 │   └── views/                 # HTML templates (emails, pages)
 │       ├── layout.html        # Base HTML email layout
 │       └── mail/              # Email templates
-└── pb_migrations/             # Schema migrations (exported from live instance)
-    ├── 1760188516_deleted_users.js    (earliest)
-    ├── ...                            (168 migration files total)
-    └── 1781095535_updated_users.js    (latest)
+└── pb_migrations/             # Schema migrations
+    ├── 0000000001_remove_default_users.js   # Removes default users collection
+    └── 1781551136_collections_snapshot.js   # Full schema snapshot (19 collections)
 ```
 
 ## Hooks Architecture
@@ -134,14 +161,14 @@ podman run -d -p 8090:8090 -v pb_data:/pb/pb_data allerleih-backend
 
 ## Syncing Migrations from Production
 
-When schema changes are made via the PocketBase admin dashboard on the live server, new migration files are auto-generated. Sync them into this repo:
+When schema changes are made via the PocketBase admin dashboard on the live server, re-export the collections snapshot:
 
 ```bash
-# SSH into the production server and copy new migrations
-scp -r menkent@menkent.uber.space:~/path-to-pocketbase/pb_migrations/* ./pb_migrations/
+# On the production server (in the directory containing pb_data/)
+./pocketbase migrate collections
 ```
 
-Then commit the new migration files to this repo.
+This generates a new `*_collections_snapshot.js` in `pb_migrations/`. Copy it to this repo and remove the old snapshot:
 
 ## Related
 
