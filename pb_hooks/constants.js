@@ -15,6 +15,14 @@ const VAPID_PUBLIC_KEY = $os.getenv('VAPID_PUBLIC_KEY') || ''
 const VAPID_PRIVATE_KEY = $os.getenv('VAPID_PRIVATE_KEY') || ''
 const VAPID_SUBJECT = $os.getenv('VAPID_SUBJECT') || 'mailto:allerleih@posteo.de'
 
+/**
+ * OpenRouteService API key — required by the /api/travel-times hook, which
+ * computes travel durations server-side (coordinates never reach the client).
+ * Must be set in the backend environment; without it ORS rejects every request
+ * and travel times silently disappear.
+ */
+const ORS_API_KEY = $os.getenv('ORS_API_KEY') || ''
+
 /** Feature flags */
 const DRY_MODE = $os.getenv('DRY_MODE') === 'true'
 
@@ -26,6 +34,7 @@ module.exports = {
     VAPID_PUBLIC_KEY,
     VAPID_PRIVATE_KEY,
     VAPID_SUBJECT,
+    ORS_API_KEY,
     DRY_MODE,
     MAIL_THROTTLE_MINUTES,
 }

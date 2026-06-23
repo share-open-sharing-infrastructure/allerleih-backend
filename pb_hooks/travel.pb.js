@@ -32,6 +32,15 @@ routerAdd(
         }
         if (owners.length === 0) return e.json(200, {})
 
+        const { ORS_API_KEY } = require(`${__hooks}/constants.js`)
+        if (!ORS_API_KEY) {
+            // Misconfiguration, not a runtime error: without the key ORS rejects
+            // every request and travel times silently disappear in the UI. Log
+            // loudly so this is diagnosable instead of looking like "no results".
+            $app.logger().error('[travel] ORS_API_KEY is not set — travel times are disabled. Set ORS_API_KEY in the backend environment.')
+            return e.json(200, {})
+        }
+
         const locations = [[userLocation.lon, userLocation.lat]].concat(owners.map((o) => [o.lon, o.lat]))
         let res
         try {
@@ -39,7 +48,7 @@ routerAdd(
                 url: 'https://api.openrouteservice.org/v2/matrix/' + PROFILES[transportMode],
                 method: 'POST',
                 headers: {
-                    Authorization: $os.getenv('ORS_API_KEY') || '',
+                    Authorization: ORS_API_KEY,
                     'Content-Type': 'application/json',
                     Accept: 'application/json',
                 },
