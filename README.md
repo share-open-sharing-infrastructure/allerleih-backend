@@ -100,6 +100,52 @@ When schema changes are made via the PocketBase admin dashboard on the live serv
 
 This generates a new `*_collections_snapshot.js` in `pb_migrations/`. Copy it to this repo and remove the old snapshot:
 
+## Testing
+
+Integration tests live in `tests/` and run against a **real, throwaway PocketBase
+instance** — so they exercise the actual migrations, collection rules and JS hooks
+end-to-end (none of which can be unit-tested in isolation). No dependencies: they
+use Node's built-in test runner (`node:test`) and `fetch`.
+
+```bash
+npm test
+```
+
+How it works (`tests/harness.mjs`):
+- wipes `pb_test_data/` and starts a fresh instance on port **8091** (your dev
+  instance on 8090 is untouched), which auto-applies `pb_migrations/` and loads
+  `pb_hooks/`;
+- creates a superuser, seeds verified test users, and exposes small `api()` /
+  `makeUser()` helpers;
+- tears the instance down and removes `pb_test_data/` afterwards.
+
+Current coverage — the **groups feature** (37 tests):
+- `tests/groups.test.mjs` — trustees-item visibility for owner/member/non-member,
+  the search view include/exclude + that it doesn't leak the `groups` column,
+  group-deletion fall-back to private, owner-only invite/member management.
+- `tests/visibility.test.mjs` — the independent visibility model: trust + group
+  as separate audiences, group-only items excluding trustees, public items,
+  multi-group sharing, items_public masking of group-only items, and
+  group-deletion making a group-only item PRIVATE (never public).
+- `tests/invites.test.mjs` — invite-link semantics: maxUses cap, idempotent join,
+  owner self-join, expiry, unknown token, revoked invite.
+- `tests/members.test.mjs` — inviting people in: owner adds a member directly
+  (member gains access), non-owners can't add members, owner removes a member
+  (loses access), a member can leave but can't remove others, and member-list
+  visibility (owner sees all, a member sees only their own row).
+- `tests/edge.test.mjs` — public preview vs. auth-required join, maxUses=0 =
+  unlimited, and the unique-membership constraint (no duplicate adds).
+- `tests/cascade.test.mjs` — cascadeDelete lifecycle: owner-account deletion
+  removes the group + members + invites, member-account deletion removes only
+  their membership, group deletion removes its invites, multi-group items aren't
+  wrongly flipped, and all group-only items in a deleted group flip to private.
+- `tests/conversations.test.mjs` — a conversation participant keeps item access
+  after leaving the group (so the chat keeps working) without the item leaking
+  back into search/profile; createRule allows members and blocks non-members.
+
+> Requires the `pocketbase` binary in the repo root (the same one used for `serve`).
+> Tests run serially (`--test-concurrency=1`) since they share the test port.
+
 ## Related
 
 - **Frontend**: [share](../share) — SvelteKit frontend

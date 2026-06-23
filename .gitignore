@@ -4,6 +4,9 @@ pocketbase
 # PocketBase data (SQLite + uploads)
 pb_data/
 
+# Throwaway data dir used by the integration test suite (tests/)
+pb_test_data/
+
 # Environment files
 .env
 .env.*
