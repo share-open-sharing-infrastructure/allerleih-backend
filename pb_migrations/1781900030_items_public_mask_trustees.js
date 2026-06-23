@@ -9,22 +9,31 @@
 migrate(
     (app) => {
         const c = app.findCollectionByNameOrId('items_public')
+        // Mask trustees-only content (name/image/links/description -> NULL) via a
+        // self-join to `items` that only matches non-trustees rows, instead of a
+        // CASE expression. PocketBase derives a view field's type from its source
+        // column; a CASE expression has no source column, so `image` would be typed
+        // as `json` and the file API (/api/files/...) would refuse to serve it,
+        // breaking image display for ALL items. Referencing `vis.image` keeps the
+        // field a direct column reference to items.image, so it stays a `file`
+        // field, while a missing join match yields NULL for masked rows.
         c.viewQuery = [
             'SELECT',
             '  items.id,',
-            '  (CASE WHEN items.trusteesOnly THEN NULL ELSE items.name END) AS name,',
-            '  (CASE WHEN items.trusteesOnly THEN NULL ELSE items.image END) AS image,',
-            '  (CASE WHEN items.trusteesOnly THEN NULL ELSE items.externalImgUrl END) AS externalImgUrl,',
-            '  (CASE WHEN items.trusteesOnly THEN NULL ELSE items.externalUrl END) AS externalUrl,',
-            '  (CASE WHEN items.trusteesOnly THEN NULL ELSE items.description END) AS description,',
+            '  vis.name AS name,',
+            '  vis.image AS image,',
+            '  vis.externalImgUrl AS externalImgUrl,',
+            '  vis.externalUrl AS externalUrl,',
+            '  vis.description AS description,',
             '  items.trusteesOnly, items.status, items.categories, items.updated,',
             '  users.id as userId, users.username, users.isInstitution, users.bio, users.verified, users.profileImage, users.created as userCreated,',
             '  (',
             "    ug.geolocation IS NOT NULL AND ug.geolocation != '' AND NOT (json_extract(ug.geolocation, '$.lon') = 0 AND json_extract(ug.geolocation, '$.lat') = 0)",
             '  ) AS ownerHasLocation',
             'FROM items',
-            'LEFT JOIN users on items.owner = users.id',
-            'LEFT JOIN user_geolocations ug on ug.user = users.id',
+            '  LEFT JOIN items vis on vis.id = items.id AND NOT items.trusteesOnly',
+            '  LEFT JOIN users on items.owner = users.id',
+            '  LEFT JOIN user_geolocations ug on ug.user = users.id',
         ].join('\n')
         app.save(c)
     },
