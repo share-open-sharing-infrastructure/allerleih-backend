@@ -4,13 +4,15 @@
  * Notification hooks — handle side-effects when notifications-relevant events occur.
  *
  * When a new message is created:
- * 1. Creates an in-app notification (always)
- * 2. Sends an email notification (throttled: max 1 per recipient per MAIL_THROTTLE_MINUTES)
+ * - Sends an email notification (throttled: max 1 per recipient per MAIL_THROTTLE_MINUTES)
+ *   - Respects user_preferences.emailNotifications opt-out (default: opted-in)
+ *
+ * Note: The in-app notification is created by the frontend sendMessage action
+ * (with the correct conversation relatedId and push notification).
  */
 
 onRecordAfterCreateSuccess((e) => {
     const { DRY_MODE, MAIL_THROTTLE_MINUTES } = require(`${__hooks}/constants.js`)
-    const { createNotification } = require(`${__hooks}/services/notification.js`)
     const { sendNotificationEmail } = require(`${__hooks}/services/mail.js`)
 
     if (DRY_MODE) return
@@ -39,21 +41,31 @@ onRecordAfterCreateSuccess((e) => {
         isThrottled = false
     }
 
-    // Create in-app notification (always, no throttle)
-    createNotification($app, {
-        recipient: recipientId,
-        sender: senderId,
-        type: 'new_message',
-        relatedId: message.id,
-        body: 'Du hast eine neue Nachricht erhalten.',
-    })
-
     if (isThrottled) {
         $app.logger().debug(
             '[notification] Email throttled for recipient',
             'recipientId', recipientId
         )
         return
+    }
+
+    // Check if recipient has opted out of email notifications.
+    // Default: opted-in (no preferences record = emails enabled).
+    try {
+        const prefs = $app.findFirstRecordByFilter(
+            'user_preferences',
+            'user = {:recipientId}',
+            { recipientId: recipientId }
+        )
+        if (prefs && prefs.get('emailNotifications') === false) {
+            $app.logger().debug(
+                '[notification] Recipient opted out of email notifications',
+                'recipientId', recipientId
+            )
+            return
+        }
+    } catch (err) {
+        // No preferences record found — default to opted-in
     }
 
     // Resolve recipient and sender user records
