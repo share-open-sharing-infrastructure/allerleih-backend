@@ -65,6 +65,26 @@ npm run dev
 
 The frontend will now use your local PocketBase instance. Register a new user through the UI or create test data via the admin dashboard.
 
+## Environment variables
+
+The hooks read configuration from environment variables (centralised in
+[`pb_hooks/constants.js`](pb_hooks/constants.js)). Set them in the environment of
+the `pocketbase serve` process — e.g. `ORS_API_KEY=... ./pocketbase serve` locally,
+or via the service/deployment config in production.
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `ORS_API_KEY` | **yes, for travel times** | — | OpenRouteService key used by the `/api/travel-times` hook. **Without it travel times silently stop working** (ORS rejects every request); the hook logs an error on each attempt. |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | for Web Push | — | VAPID keypair for push notifications. |
+| `VAPID_SUBJECT` | no | `mailto:allerleih@posteo.de` | VAPID subject (mailto: or https: URI). |
+| `LOG_LEVEL` | no | `4` | Log verbosity: 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR. |
+| `DRY_MODE` | no | `false` | When `true`, suppresses side effects such as outbound email. |
+| `MAIL_THROTTLE_MINUTES` | no | `15` | Max one notification email per recipient within this window. |
+
+> **Note:** travel-time computation moved from the frontend into this backend
+> hook, so `ORS_API_KEY` must be present **here** (the frontend still needs its
+> own `ORS_API_KEY` for address autocomplete via `/api/geocode`).
+
 ## Project Structure
 
 ```
