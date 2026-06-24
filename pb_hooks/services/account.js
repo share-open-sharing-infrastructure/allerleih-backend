@@ -208,10 +208,16 @@ function buildExport(app, userRecord) {
 
 /**
  * Convert a PocketBase Record into a plain JS object for export. Uses the record's
- * public (non-hidden) export so internal columns (passwords, tokens) are excluded.
+ * public (non-hidden) export so internal columns (passwords, tokens) are excluded, then
+ * strips PocketBase-internal metadata that isn't meaningful to the data subject and
+ * leaks our schema (`collectionId`, `collectionName`, `expand`).
  */
 function structuredRecord(record) {
-    return JSON.parse(JSON.stringify(record.publicExport()))
+    const obj = JSON.parse(JSON.stringify(record.publicExport()))
+    delete obj.collectionId
+    delete obj.collectionName
+    delete obj.expand
+    return obj
 }
 
 module.exports = {
