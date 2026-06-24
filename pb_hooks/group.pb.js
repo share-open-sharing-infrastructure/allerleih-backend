@@ -54,6 +54,65 @@ onRecordDelete((e) => {
     e.next()
 }, 'groups')
 
+// When a group is created, add its owner as an `admin` member. Modeling the
+// owner as a real member row means the owner sees items members shared with the
+// group, is counted in the roster, and gives us the groundwork for co-admins.
+// Runs in elevated context, so it bypasses the group_members create rule.
+onRecordAfterCreateSuccess((e) => {
+    const ownerId = e.record.getString('owner')
+    if (!ownerId) {
+        e.next()
+        return
+    }
+    try {
+        // Idempotent against the unique (group,user) index: never double-insert
+        // (defensive against retries / overlap with the one-time backfill).
+        let existing = null
+        try {
+            existing = e.app.findFirstRecordByFilter(
+                'group_members',
+                'group = {:g} && user = {:u}',
+                { g: e.record.id, u: ownerId }
+            )
+        } catch (_) {
+            existing = null
+        }
+        if (!existing) {
+            const m = new Record(e.app.findCollectionByNameOrId('group_members'))
+            m.set('group', e.record.id)
+            m.set('user', ownerId)
+            m.set('role', 'admin')
+            e.app.save(m)
+        }
+    } catch (err) {
+        // The owner MUST exist as an admin member or core invariants break (owner
+        // can't see member-shared items, roster/count are wrong, the admin-leave
+        // guard has nothing to protect). Rather than leave an ownerless group,
+        // roll the group back and surface the failure instead of swallowing it.
+        e.app.logger().error('[group-create] owner admin membership failed; rolling back group', 'error', String(err))
+        try {
+            e.app.delete(e.record)
+        } catch (delErr) {
+            e.app.logger().error('[group-create] rollback delete failed', 'error', String(delErr))
+        }
+        throw new BadRequestError('Gruppe konnte nicht vollständig angelegt werden.')
+    }
+    e.next()
+}, 'groups')
+
+// Default any membership without an explicit role to `member`. Select fields
+// have no schema default, so a row created via the bare collection API (e.g. the
+// owner adding someone directly) would otherwise have an empty role. The
+// owner-admin hook and the self-join path set their roles explicitly, so this
+// only fills the gap for the owner-add path. (Self-join is separately constrained
+// to role="member" by the createRule, evaluated on the request before this runs.)
+onRecordCreate((e) => {
+    if (!e.record.getString('role')) {
+        e.record.set('role', 'member')
+    }
+    e.next()
+}, 'group_members')
+
 // Public preview: show who you've been invited to join before logging in.
 routerAdd('GET', '/api/group-invite/{token}', (e) => {
     const { resolveInvite } = require(`${__hooks}/services/group.js`)
@@ -150,6 +209,7 @@ routerAdd(
                 const member = new Record(collection)
                 member.set('group', groupId)
                 member.set('user', me)
+                member.set('role', 'member')
                 txApp.save(member)
 
                 fresh.set('uses', uses + 1)

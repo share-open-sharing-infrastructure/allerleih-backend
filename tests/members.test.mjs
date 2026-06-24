@@ -99,14 +99,30 @@ test('a member can leave (delete their own membership) but cannot remove another
 	assert.equal((await api('GET', `/api/collections/items/records/${itemId}`, alice.t)).status, 404, 'alice lost access')
 })
 
-test('the owner sees the full member list; a member sees only their own row', async () => {
+test('every member sees the full roster, and the owner is an admin member', async () => {
 	const { groupId } = await groupWithItem('MemberList')
 	await api('POST', '/api/collections/group_members/records', owner.t, { group: groupId, user: alice.id })
 	await api('POST', '/api/collections/group_members/records', owner.t, { group: groupId, user: bob.id })
 
+	// owner (admin member) + alice + bob = 3 rows
 	const ownerView = await api('GET', `/api/collections/group_members/records?filter=${encodeURIComponent(`group="${groupId}"`)}`, owner.t)
-	assert.equal(ownerView.json.totalItems, 2, 'owner sees all members')
+	assert.equal(ownerView.json.totalItems, 3, 'owner sees the full roster')
+	const ownerRow = ownerView.json.items.find((r) => r.user === owner.id)
+	assert.equal(ownerRow?.role, 'admin', 'the owner is stored as an admin member')
+	// the directly-added members are plain `member`s, not admins
+	assert.equal(ownerView.json.items.find((r) => r.user === alice.id)?.role, 'member', 'alice is a member')
+	assert.equal(ownerView.json.items.find((r) => r.user === bob.id)?.role, 'member', 'bob is a member')
 
+	// a regular member now ALSO sees the full roster (was: only their own row)
 	const aliceView = await api('GET', `/api/collections/group_members/records?filter=${encodeURIComponent(`group="${groupId}"`)}`, alice.t)
-	assert.equal(aliceView.json.totalItems, 1, 'member sees only their own membership row')
+	assert.equal(aliceView.json.totalItems, 3, 'a member sees the full roster too')
+})
+
+test('the owner cannot remove their own admin membership (must delete the group)', async () => {
+	const { groupId } = await groupWithItem('OwnerLeave')
+	const rows = await api('GET', `/api/collections/group_members/records?filter=${encodeURIComponent(`group="${groupId}" && user="${owner.id}"`)}`, owner.t)
+	assert.equal(rows.json.totalItems, 1, 'owner has an admin membership row')
+	const del = await api('DELETE', `/api/collections/group_members/records/${rows.json.items[0].id}`, owner.t)
+	assert.notEqual(del.status, 204, 'owner admin row is not deletable via leave')
+	assert.notEqual(del.status, 200)
 })

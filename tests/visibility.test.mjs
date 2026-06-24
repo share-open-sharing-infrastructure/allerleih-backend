@@ -144,6 +144,21 @@ test('deleting a group-only item\'s last group makes it PRIVATE, never public', 
 	assert.deepEqual(ownerView.json.groups, [], 'group ref removed')
 })
 
+test('the group owner sees an item a member shared with the owner group (bug #1)', async () => {
+	const g = await createGroup('OwnerSeesMemberItem')
+	await addMember(g, groupMember.id)
+	// the MEMBER shares THEIR own item with the owner's group
+	const it = await api('POST', '/api/collections/items/records', groupMember.t, {
+		name: 'MemberShared', description: 'x', place: 'p', owner: groupMember.id,
+		trusteesOnly: true, groups: [g], status: 'available',
+	})
+	assert.equal(it.status, 200)
+	// the owner is an admin member of the group, so they see it now
+	assert.equal((await api('GET', `/api/collections/items/records/${it.json.id}`, owner.t)).status, 200, 'owner sees the member-shared group item')
+	// an outsider still does not
+	assert.equal((await api('GET', `/api/collections/items/records/${it.json.id}`, outsider.t)).status, 404, 'outsider does not')
+})
+
 test('owner and members can read the group record; non-members cannot', async () => {
 	const g = await createGroup('GroupRecord')
 	await addMember(g, groupMember.id)

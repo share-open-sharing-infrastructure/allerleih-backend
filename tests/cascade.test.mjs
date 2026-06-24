@@ -29,6 +29,14 @@ async function setupJoinedGroup(owner, member) {
 	assert.equal(inv.status, 200)
 	const join = await api('POST', `/api/group-invite/${inv.json.token}/join`, member.t)
 	assert.equal(join.status, 200)
+	// the invited member must land as a plain `member` (not admin)
+	const memberRow = await api(
+		'GET',
+		`/api/collections/group_members/records?filter=${encodeURIComponent(`group="${g.json.id}" && user="${member.id}"`)}`,
+		owner.t
+	)
+	assert.equal(memberRow.json.totalItems, 1, 'joined member has a membership row')
+	assert.equal(memberRow.json.items[0].role, 'member', 'invited member gets role=member')
 	return { groupId: g.json.id, token: inv.json.token, inviteId: inv.json.id }
 }
 
@@ -38,9 +46,10 @@ test('deleting the owner account cascades: group, its members and its invites al
 	const { groupId, token } = await setupJoinedGroup(owner, member)
 
 	// sanity: the member is in, and the group/invite exist
+	// owner (admin) + the joined member
 	assert.equal(
 		(await api('GET', `/api/collections/group_members/records?filter=${encodeURIComponent(`group="${groupId}"`)}`, adminAuth())).json.totalItems,
-		1
+		2
 	)
 
 	// owner deletes their account (via admin — cascade is DB-level, trigger-agnostic)
@@ -73,10 +82,12 @@ test('a member deleting their account removes only their membership; group and o
 	const del = await api('DELETE', `/api/collections/users/records/${m1.id}`, adminAuth())
 	assert.ok([200, 204].includes(del.status))
 
-	// m1's membership is gone, m2's remains, the group is intact
+	// m1's membership is gone; owner (admin) + m2 remain; the group is intact
 	const rows = await api('GET', `/api/collections/group_members/records?filter=${encodeURIComponent(`group="${groupId}"`)}`, owner.t)
-	assert.equal(rows.json.totalItems, 1, 'only one membership left')
-	assert.equal(rows.json.items[0].user, m2.id, 'the remaining member is m2')
+	const userIds = rows.json.items.map((r) => r.user)
+	assert.equal(rows.json.totalItems, 2, 'owner + m2 remain')
+	assert.ok(userIds.includes(m2.id), 'm2 remains')
+	assert.ok(!userIds.includes(m1.id), 'm1 is gone')
 	assert.equal((await api('GET', `/api/collections/groups/records/${groupId}`, owner.t)).status, 200, 'group still exists')
 })
 
