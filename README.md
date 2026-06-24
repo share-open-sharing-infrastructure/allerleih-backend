@@ -49,17 +49,16 @@ Or visit the admin UI at `http://127.0.0.1:8090/_/` on first run.
 
 ### 4. Connect the SvelteKit frontend
 
-In the `share` repo, update `.env` to point at the local backend:
+In the frontend repo (`allerleih`), update `.env` to point at the local backend:
 
 ```env
-PB_URL="http://127.0.0.1:8090/"
 PUBLIC_PB_URL="http://127.0.0.1:8090/"
 ```
 
 Then start the frontend:
 
 ```bash
-cd ../share
+cd ../allerleih
 npm run dev
 ```
 
@@ -72,21 +71,23 @@ The frontend will now use your local PocketBase instance. Register a new user th
 ├── package.json               # Prettier config only
 ├── pb_hooks/                  # Server-side JavaScript hooks
 │   ├── main.pb.js             # Bootstrap + log interception
-│   ├── notification.pb.js     # Notification hooks (scaffolding)
+│   ├── *.pb.js                # Custom route handlers / record hooks, one per area
+│   │                          #   (group.pb.js, invite.pb.js, contact.pb.js, travel.pb.js, notification.pb.js)
 │   ├── constants.js           # Environment variables & config
-│   ├── services/              # Business logic layer
-│   │   └── notification.js    # Notification creation service
-│   ├── routes/                # Custom API route handlers
-│   ├── jobs/                  # Cron/scheduled tasks
+│   ├── services/              # Business logic layer (group.js, mail.js, notification.js)
+│   ├── routes/                # (placeholder.js — actual routes are registered in the *.pb.js files above)
+│   ├── jobs/                  # (placeholder.js — no scheduled jobs yet)
 │   ├── utils/                 # Shared utilities
 │   │   ├── common.js          # Date formatting, helpers
 │   │   └── db.js              # wrapTransactional helper
-│   └── views/                 # HTML templates (emails, pages)
+│   └── views/                 # HTML templates
 │       ├── layout.html        # Base HTML email layout
-│       └── mail/              # Email templates
-└── pb_migrations/             # Schema migrations
+│       └── mail/              # Email templates (e.g. new_message.html)
+└── pb_migrations/             # Schema migrations (auto-applied on start)
     ├── 0000000001_remove_default_users.js   # Removes default users collection
-    └── 1781551136_collections_snapshot.js   # Full schema snapshot (19 collections)
+    ├── 1781551136_collections_snapshot.js   # Baseline schema snapshot (19 collections in the file)
+    └── …                                    # later migrations add user_geolocations, user_contacts,
+                                             #   groups, group_members, group_invites, etc.
 ```
 
 ## Syncing Migrations from Production
@@ -98,7 +99,9 @@ When schema changes are made via the PocketBase admin dashboard on the live serv
 ./pocketbase migrate collections
 ```
 
-This generates a new `*_collections_snapshot.js` in `pb_migrations/`. Copy it to this repo and remove the old snapshot:
+This generates a new `*_collections_snapshot.js` in `pb_migrations/`. Copy it into
+this repo's `pb_migrations/`, delete the previous `*_collections_snapshot.js` (keep
+only the newest one), and commit the change.
 
 ## Testing
 
@@ -119,29 +122,38 @@ How it works (`tests/harness.mjs`):
   `makeUser()` helpers;
 - tears the instance down and removes `pb_test_data/` afterwards.
 
-Current coverage — the **groups feature** (37 tests):
+Current coverage — the **groups feature** (45 tests). Round 2 added a
+`group_members.role` (`admin`/`member`, with the owner stored as an `admin` member)
+and public/self-join groups (`groups.isPublic`); the suites below cover both.
 - `tests/groups.test.mjs` — trustees-item visibility for owner/member/non-member,
   the search view include/exclude + that it doesn't leak the `groups` column,
   group-deletion fall-back to private, owner-only invite/member management.
 - `tests/visibility.test.mjs` — the independent visibility model: trust + group
   as separate audiences, group-only items excluding trustees, public items,
-  multi-group sharing, items_public masking of group-only items, and
-  group-deletion making a group-only item PRIVATE (never public).
+  multi-group sharing, items_public masking of group-only items, group-deletion
+  making a group-only item PRIVATE (never public), and the owner (as an admin
+  member) seeing an item a member shared with the owner's group.
 - `tests/invites.test.mjs` — invite-link semantics: maxUses cap, idempotent join,
   owner self-join, expiry, unknown token, revoked invite.
 - `tests/members.test.mjs` — inviting people in: owner adds a member directly
   (member gains access), non-owners can't add members, owner removes a member
-  (loses access), a member can leave but can't remove others, and member-list
-  visibility (owner sees all, a member sees only their own row).
+  (loses access), a member can leave but can't remove others; every member sees
+  the full roster, the owner is an `admin` member (added members are `member`s),
+  and the owner cannot remove their own admin row.
+- `tests/public-groups.test.mjs` — public/self-join groups: a non-member can read
+  a public group (name + description) but not a private one; a user can self-join
+  a public group and then see its items; self-join is rejected for private groups,
+  cannot add someone other than yourself, and cannot grant yourself `role=admin`.
 - `tests/edge.test.mjs` — public preview vs. auth-required join, maxUses=0 =
   unlimited, and the unique-membership constraint (no duplicate adds).
 - `tests/cascade.test.mjs` — cascadeDelete lifecycle: owner-account deletion
   removes the group + members + invites, member-account deletion removes only
   their membership, group deletion removes its invites, multi-group items aren't
-  wrongly flipped, and all group-only items in a deleted group flip to private.
-- `tests/conversations.test.mjs` — a conversation participant keeps item access
-  after leaving the group (so the chat keeps working) without the item leaking
-  back into search/profile; createRule allows members and blocks non-members.
+  wrongly flipped, all group-only items in a deleted group flip to private, and an
+  invited member lands with `role=member`.
+- `tests/conversations.test.mjs` — the conversation **requester** keeps item access
+  after being removed from the group (so the chat keeps working) without the item
+  leaking back into search/profile; createRule allows members and blocks non-members.
 
 > Requires the `pocketbase` binary in the repo root (the same one used for `serve`).
 > Tests run serially (`--test-concurrency=1`) since they share the test port.
