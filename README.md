@@ -109,6 +109,66 @@ or via the service/deployment config in production.
     └── 1781551136_collections_snapshot.js   # Full schema snapshot (19 collections)
 ```
 
+## Writing migrations
+
+Migrations live in `pb_migrations/` and are **applied in filename order on `pocketbase serve`**.
+Each file exports an up and a down function:
+
+```js
+/// <reference path="../pb_data/types.d.ts" />
+migrate(
+  (app) => { /* up:   apply the change   */ },
+  (app) => { /* down: revert the change  */ }
+);
+```
+
+Conventions:
+
+- **Filename:** `<unix-seconds>_<snake_case_description>.js`. The numeric prefix must be **greater
+  than every existing migration** so it runs last — use the current Unix timestamp (`date +%s`).
+- **Always provide the down function** so the migration is reversible.
+- **Make it idempotent** where practical (guard with an `if` so re-running is a no-op), and keep
+  up/down exact inverses.
+
+### Editing a view (e.g. adding a sortable column)
+
+A SQL view (`items_public`, `items_searchable`) returns **only the columns in its `viewQuery`
+SELECT**. To expose a new column, change the `viewQuery` and **re-save** the collection —
+PocketBase re-derives the view's field list from the new SELECT automatically (no manual field
+definitions needed). Prefer a **string-append/replace** over rewriting the whole query, so the
+migration survives other branches' changes to the same view (e.g. an appended `WHERE`):
+
+```js
+migrate(
+  (app) => {
+    const v = app.findCollectionByNameOrId('items_searchable');
+    if (!v.viewQuery.includes('items.created')) {
+      v.viewQuery = v.viewQuery.replace('items.updated,', 'items.updated, items.created,');
+      app.save(v); // re-syncs the view's fields, adding `created`
+    }
+  },
+  (app) => {
+    const v = app.findCollectionByNameOrId('items_searchable');
+    v.viewQuery = v.viewQuery.replace('items.updated, items.created,', 'items.updated,');
+    app.save(v);
+  }
+);
+```
+
+A view's access rules reference field *names*, so adding a column leaves existing rules valid.
+After a view change, update the column table in the frontend's `docs/data-model.md` so the docs
+and the `ItemPublic` TS type stay honest.
+
+### Apply & verify locally
+
+```bash
+./pocketbase serve          # applies pending migrations on start
+# verify a view column / sort works:
+curl 'http://127.0.0.1:8090/api/collections/items_searchable/records?sort=-created&perPage=3'
+```
+
+To reverse the most recent migration(s) during development: `./pocketbase migrate down 1`.
+
 ## Syncing Migrations from Production
 
 When schema changes are made via the PocketBase admin dashboard on the live server, re-export the collections snapshot:
