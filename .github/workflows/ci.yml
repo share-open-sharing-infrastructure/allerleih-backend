@@ -113,24 +113,20 @@ jobs:
       - name: Configure supervisord service
         run: |
           ssh -p "${{ vars.UBERSPACE_SSH_PORT || 22 }}" \
-            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << 'EOF'
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << EOF
           CONF_DIR=~/etc/services.d
-          mkdir -p "$CONF_DIR"
+          mkdir -p "\$CONF_DIR"
 
-          # Only write the config if it doesn't already exist
-          if [ ! -f "$CONF_DIR/pocketbase.ini" ]; then
-            cat > "$CONF_DIR/pocketbase.ini" << 'CONF'
+          cat > "\$CONF_DIR/pocketbase.ini" << 'CONF'
           [program:pocketbase]
           directory=%(ENV_HOME)s/pocketbase
           command=pocketbase serve --http :8090
+          environment=ORS_API_KEY="${{ secrets.ORS_API_KEY }}"
           autostart=yes
           autorestart=yes
           startsecs=60
           CONF
-            echo "supervisord config written."
-          else
-            echo "supervisord config already exists, skipping."
-          fi
+          echo "supervisord config written."
 
           supervisorctl reread
           supervisorctl update

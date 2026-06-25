@@ -5,6 +5,7 @@
  *
  * When a new message is created:
  * - Sends an email notification (throttled: max 1 per recipient per MAIL_THROTTLE_MINUTES)
+ * - Respects user_preferences.emailNotifications opt-out (default: opted-in)
  *
  * Note: The in-app notification is created by the frontend sendMessage action
  * (with the correct conversation relatedId and push notification).
@@ -46,6 +47,25 @@ onRecordAfterCreateSuccess((e) => {
             'recipientId', recipientId
         )
         return
+    }
+
+    // Check if recipient has opted out of email notifications.
+    // Default: opted-in (no preferences record = emails enabled).
+    try {
+        const prefs = $app.findFirstRecordByFilter(
+            'user_preferences',
+            'user = {:recipientId}',
+            { recipientId: recipientId }
+        )
+        if (prefs && prefs.get('emailNotifications') === false) {
+            $app.logger().debug(
+                '[notification] Recipient opted out of email notifications',
+                'recipientId', recipientId
+            )
+            return
+        }
+    } catch (err) {
+        // No preferences record found — default to opted-in
     }
 
     // Resolve recipient and sender user records
