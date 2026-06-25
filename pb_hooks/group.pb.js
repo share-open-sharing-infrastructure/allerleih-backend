@@ -147,6 +147,12 @@ routerAdd(
     '/api/group-invite/{token}/join',
     (e) => {
         const { resolveInvite } = require(`${__hooks}/services/group.js`)
+        const { isAuthLegalLocked } = require(`${__hooks}/services/legal.js`)
+        // The decline-lock must hold here too: onRecord*Request guards don't fire for
+        // custom routes, and this one mutates (creates a membership) in superuser context.
+        if (isAuthLegalLocked(e.auth)) {
+            return e.json(403, { joined: false, reason: 'legal_locked' })
+        }
         const token = e.request.pathValue('token')
         const me = e.auth.id
 
