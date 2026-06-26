@@ -5,7 +5,7 @@
  *
  * When a new message is created:
  * - Sends an email notification (throttled: max 1 per recipient per MAIL_THROTTLE_MINUTES)
- *   - Respects user_preferences.emailNotifications opt-out (default: opted-in)
+ * - Respects user_preferences.emailNotifications opt-out (default: opted-in)
  *
  * Note: The in-app notification is created by the frontend sendMessage action
  * (with the correct conversation relatedId and push notification).
