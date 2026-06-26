@@ -18,6 +18,10 @@ test('active legal documents are world-readable; exactly one active per type', a
 	assert.equal(docs.status, 200, 'guests can read active docs (needed by /misc/tos|privacy)')
 	const types = docs.json.items.map((d) => d.docType).sort()
 	assert.deepEqual(types, ['privacy', 'tos'], 'one active tos + one active privacy')
+	// effectiveDate is a real date field (PR #440 review) — values must parse as dates.
+	for (const d of docs.json.items) {
+		assert.ok(d.effectiveDate && !Number.isNaN(Date.parse(d.effectiveDate)), `effectiveDate is a valid date for ${d.docType}`)
+	}
 })
 
 test('a new user is auto-consented to the active versions and has accepted audit records', async () => {
