@@ -5,7 +5,7 @@
 // fully-public items.
 //
 // items_public is read without auth and masks restricted items' content (see
-// 1782900049_items_public_mask_grouped.js). The base `users` viewRule requires auth, so
+// 1781900049_items_public_mask_grouped.js). The base `users` viewRule requires auth, so
 // an anonymous visitor can't read contactEmail/contactUrl directly — the item detail page
 // therefore reads the public contact from this view instead. We surface three derived
 // columns, each NULL unless the owner chose the matching method and made it public:
