@@ -115,8 +115,10 @@ function anonymizeAccount(app, userRecord) {
     userRecord.set('verified', false)
     userRecord.set('bio', '')
     userRecord.set('city', '')
-    userRecord.set('contactViaEmail', false) // issue #438 — drop the off-platform contact PII
+    userRecord.set('contactMethod', '') // issue #438 — drop the off-platform contact PII
     userRecord.set('contactEmail', '')
+    userRecord.set('contactUrl', '')
+    userRecord.set('contactPublic', false)
     userRecord.set('trusts', [])
     userRecord.set('invitedBy', '')
     userRecord.set('inviteCode', '')
@@ -190,8 +192,10 @@ function buildExport(app, userRecord) {
             bio: userRecord.get('bio'),
             isInstitution: userRecord.getBool('isInstitution'),
             verified: userRecord.getBool('verified'),
-            contactViaEmail: userRecord.getBool('contactViaEmail'),
+            contactMethod: userRecord.get('contactMethod'),
             contactEmail: userRecord.get('contactEmail'),
+            contactUrl: userRecord.get('contactUrl'),
+            contactPublic: userRecord.getBool('contactPublic'),
             inviteCode: userRecord.get('inviteCode'),
             invitedBy: userRecord.get('invitedBy'),
             profileImage: userRecord.get('profileImage'),
