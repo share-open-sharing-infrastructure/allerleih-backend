@@ -84,6 +84,101 @@ or via the service/deployment config in production.
 > hook, so `ORS_API_KEY` must be present **here** (the frontend still needs its
 > own `ORS_API_KEY` for address autocomplete via `/api/geocode`).
 
+## Mail & SMTP configuration
+
+PocketBase normally stores SMTP settings per-instance in the admin UI and, without a
+working SMTP server, falls back to local **sendmail**. On servers behind restricted
+relays that fallback only delivers to verified addresses (the symptom in #8). To make
+delivery reliable and reproducible, `pb_hooks/mail_config.pb.js` applies the SMTP
+settings from the environment on bootstrap.
+
+### Configuring SMTP via env vars
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `SMTP_HOST` | to enable SMTP | — | SMTP server hostname. **Set = configure SMTP from env; unset = leave existing settings untouched** (see below). |
+| `SMTP_PORT` | no | `587` | SMTP port (parsed as an integer). |
+| `SMTP_USERNAME` | with `SMTP_HOST` | — | SMTP auth username — usually the **full email address** (see troubleshooting). |
+| `SMTP_PASSWORD` | with `SMTP_HOST` | — | SMTP auth password. Never commit or log this. |
+| `SMTP_TLS` | no | `false` | `true` = implicit TLS (typically port **465**); `false` = STARTTLS (typically port **587**). |
+| `SMTP_AUTH_METHOD` | no | `PLAIN` | SMTP authentication method — PocketBase accepts only `PLAIN` (default) or `LOGIN`. |
+| `SMTP_LOCAL_NAME` | no | — | HELO/EHLO local name; leave empty unless the relay requires a specific one. |
+| `SENDER_ADDRESS` | no | (admin-UI value) | Optional override of the `From` address; only applied when set. |
+| `SENDER_NAME` | no | (admin-UI value) | Optional override of the sender display name; only applied when set. |
+| `APP_URL` | no | (admin-UI value) | Optional override of the app URL used to build verification/reset/email-change links; only applied when set. |
+
+The TLS rule mirrors the usual convention: **`SMTP_TLS=true` for implicit TLS on 465**,
+**`SMTP_TLS=false` for STARTTLS on 587**. Set `SMTP_PORT` to match.
+
+### Enabling, updating and removing
+
+The hook only ever **adds or updates** SMTP from the environment — it never disables or
+clears anything:
+
+- **`SMTP_HOST` set** → SMTP is enabled and configured from the env values on bootstrap
+  (idempotent: it only writes when a value actually changed).
+- **`SMTP_HOST` unset** → no-op. Whatever is already configured — e.g. via the PocketBase
+  admin UI — is left completely untouched.
+
+This makes deploys safe: rolling this out to an instance that configures SMTP in the admin
+UI will **not** disturb its mail setup. To **remove** an env-configured server, unset the
+vars and (if you want mail off) disable/clear SMTP in the admin UI — unsetting the env
+alone does not erase what was last written to `pb_data`.
+
+> **All SMTP changes apply at startup only.** The hook runs on bootstrap, so after adding,
+> changing or removing any `SMTP_*` / `SENDER_*` / `APP_URL` variable you must **restart the
+> `pocketbase serve` process** for it to take effect.
+
+**PocketBase does not auto-load a `.env` file** — the vars must already be in the
+environment of the `pocketbase serve` process. For local use, keep them in a gitignored
+file and source it, so the password stays out of your shell history:
+
+```bash
+set -a; source mail.env; set +a   # mail.env is gitignored
+./pocketbase serve --http=0.0.0.0:8090
+```
+
+…or pass them inline (this leaves `SMTP_PASSWORD` in your shell history / process list):
+
+```bash
+SMTP_HOST=smtp.example.org SMTP_PORT=587 SMTP_USERNAME=allerleih@example.org \
+SMTP_PASSWORD=… SMTP_TLS=false SENDER_ADDRESS=allerleih@example.org \
+APP_URL=http://127.0.0.1:8090 ./pocketbase serve --http=0.0.0.0:8090
+```
+
+In production set these via the service/deployment config (systemd `EnvironmentFile=` /
+`Environment=`, or your container's env), not on the command line.
+
+### Who receives notification emails
+
+For the new-message notification (`pb_hooks/notification.pb.js`), an email is sent unless:
+
+- the recipient has opted out (`user_preferences.emailNotifications`; default is opted-in
+  when no preferences record exists), or
+- the recipient is currently throttled: at most one notification email per recipient per
+  `MAIL_THROTTLE_MINUTES` window (default `15`).
+
+In-app and push notifications are independent of these email rules.
+
+### Troubleshooting
+
+- **Check the startup log first.** On boot the hook logs a `[mail]` line stating what it did:
+  `[mail] SMTP configured from environment` (with host/port/tls/sender) confirms your env vars
+  were applied; `[mail] SMTP already matches environment — no change` means it was already set;
+  `[mail] SMTP_HOST not set — leaving existing mail settings untouched` means no env SMTP was
+  provided (any admin-UI config is kept); a `[mail] FAILED …` error means the settings were
+  rejected and mail is **not** configured.
+- **Mails only reach verified/some addresses, or not at all.** That is the classic
+  sendmail-fallback symptom on restricted relays. Configure a real SMTP server via the
+  env vars above so PocketBase sends through it instead of local sendmail.
+- **`535 5.7.8 auth invalid` (or similar auth rejection).** Most relays expect the
+  **full email address** as the login. Set `SMTP_USERNAME` to the complete address,
+  matching the sender (e.g. `allerleih@example.org`), not just the local part.
+- **Verification / password-reset / email-change links point at the wrong host.** Those
+  links are built from `APP_URL` (the mail `meta` app URL). Set `APP_URL` to the
+  PocketBase host that actually serves the auth routes, otherwise the links in delivered
+  mails will be wrong.
+
 ## Project Structure
 
 ```

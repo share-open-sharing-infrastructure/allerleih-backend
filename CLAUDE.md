@@ -32,6 +32,7 @@ npm test                                 # node --test, runs tests/*.test.mjs se
 ```
 pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── main.pb.js               # bootstrap / startup logging
+├── mail_config.pb.js        # bootstrap: configures SMTP from env when SMTP_HOST is set (#8); unset = no-op
 ├── constants.js             # ALL env vars + config in one place (see below)
 ├── group.pb.js              # group lifecycle hooks + /api/group-invite/* routes
 ├── invite.pb.js             # GET /api/invite/{code} — public invite-code lookup
@@ -197,6 +198,9 @@ All env/config is centralized here; most have safe defaults:
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | `VAPID_*` | — / `mailto:allerleih@posteo.de` | Web-push |
 | `DRY_MODE` | `DRY_MODE` | `false` | When `true`, skips sending email/notifications (local dev) |
 | `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | `SMTP_*` | — / `587` / — / — | SMTP server applied on bootstrap by `mail_config.pb.js` **only when `SMTP_HOST` is set** (idempotent). Empty `SMTP_HOST` = no-op: existing admin-UI settings are left untouched (never disabled/cleared) |
+| `SMTP_TLS` / `SMTP_AUTH_METHOD` / `SMTP_LOCAL_NAME` | `SMTP_*` | `false` / `PLAIN` / — | `SMTP_TLS=true` = implicit TLS (465); `false` = STARTTLS (587) |
+| `SENDER_ADDRESS` / `SENDER_NAME` / `APP_URL` | same | — | Optional overrides of the `meta` mail settings; only applied when set |
 
 Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
 geocoding, and email don't work for real.
