@@ -152,4 +152,4 @@ Or apply against the live DB by starting the server:
 - [ ] Relations reference the right `collectionId` (`users` = `hbacudkt08pfcy3`)
 - [ ] `cascadeDelete` set deliberately — remember DB-level cascades do **not** fire hooks
 - [ ] If item/user visibility changed, the matching `items_public` / `users_public` / `items_searchable` view was updated too
-- [ ] Coordinated with `~/allerleih` (frontend) if the schema change is breaking
+- [ ] Coordinated with the frontend — run the **`schema-change`** skill in `~/allerleih` to keep `src/lib/types/models.ts`, `docs/data-model.md`, and the public-view leak check in lockstep
