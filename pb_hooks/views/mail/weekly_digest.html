@@ -1,0 +1,22 @@
+<p>Hallo {{.RECIPIENT_NAME}},</p>
+<p>hier ist dein Wochen-R&uuml;ckblick &mdash; diese Woche neu auf AllerLeih:</p>
+
+{{if .TRUSTED_ITEMS_HTML}}
+<h3 style="margin: 24px 0 12px 0; font-size: 16px; color: #1F1F1F;">Von Personen, denen du vertraust</h3>
+{{raw .TRUSTED_ITEMS_HTML}}
+{{end}}
+
+{{if .GROUP_ITEMS_HTML}}
+<h3 style="margin: 24px 0 12px 0; font-size: 16px; color: #1F1F1F;">Aus deinen Gruppen</h3>
+{{raw .GROUP_ITEMS_HTML}}
+{{end}}
+
+{{if .PUBLIC_ITEMS_HTML}}
+<h3 style="margin: 24px 0 12px 0; font-size: 16px; color: #1F1F1F;">Neu auf der Plattform</h3>
+{{raw .PUBLIC_ITEMS_HTML}}
+{{end}}
+
+<p style="padding-top: 16px;">
+    <a href="https://allerleih.org/search" style="display: inline-block; padding: 10px 16px; background-color: #9BAEED; color: #000000; text-decoration: none; border: 1px solid #000000; border-radius: 50px; font-weight: bold; font-size: 14px; font-family: 'Work Sans', sans-serif; text-align: center;">Alle neuen Gegenst&auml;nde ansehen</a>
+</p>
+<p style="margin-top: 24px; font-size: 12px; color: #6B6B6B;">Du m&ouml;chtest diese E-Mails nicht mehr erhalten? <a href="https://allerleih.org/user/profile" style="color: #6B6B6B; text-decoration: underline;">Benachrichtigungen anpassen</a></p>
