@@ -49,6 +49,38 @@ onRecordAfterCreateSuccess((e) => {
         return
     }
 
+    // Check if recipient is currently viewing the conversation.
+    // The frontend periodically updates requesterLastSeenAt / ownerLastSeenAt while
+    // the conversation page is open. If the timestamp is within the last 30 seconds,
+    // the recipient is actively viewing — skip the email.
+    try {
+        const conversation = $app.findFirstRecordByFilter(
+            'conversations',
+            '(requester = {:recipientId} || itemOwner = {:recipientId}) && (requester = {:senderId} || itemOwner = {:senderId})',
+            { recipientId: recipientId, senderId: senderId }
+        )
+        if (conversation) {
+            const recipientIsRequester = conversation.get('requester') === recipientId
+            const lastSeenStr = recipientIsRequester
+                ? conversation.get('requesterLastSeenAt')
+                : conversation.get('ownerLastSeenAt')
+            if (lastSeenStr) {
+                const lastSeen = new Date(lastSeenStr).getTime()
+                const now = Date.now()
+                if (now - lastSeen < 30000) {
+                    $app.logger().debug(
+                        '[notification] Recipient is viewing conversation, skipping email',
+                        'recipientId', recipientId,
+                        'lastSeenAt', lastSeenStr
+                    )
+                    return
+                }
+            }
+        }
+    } catch (err) {
+        // Conversation not found — proceed with email (e.g. edge case)
+    }
+
     // Check if recipient has opted out of email notifications.
     // Default: opted-in (no preferences record = emails enabled).
     try {
@@ -73,8 +105,8 @@ onRecordAfterCreateSuccess((e) => {
         const recipient = $app.findRecordById('users', recipientId)
         const sender = $app.findRecordById('users', senderId)
         const recipientEmail = recipient.email()
-        const recipientName = recipient.get('name') || 'Nutzer:in'
-        const senderName = sender.get('name') || 'Jemand'
+        const recipientName = recipient.get('username') || 'Nutzer:in'
+        const senderName = sender.get('username') || 'Jemand'
 
         if (!recipientEmail) {
             $app.logger().warn(
