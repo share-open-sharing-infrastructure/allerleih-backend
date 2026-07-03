@@ -50,7 +50,7 @@ async function waitForHealth(tries = 60) {
  * applies migrations), serve, and authenticate as superuser for seeding.
  * Returns the child process — pass it to stopPB() in an after() hook.
  */
-export async function startPB() {
+export async function startPB(extraEnv = {}) {
 	rmSync(DIR, { recursive: true, force: true })
 
 	const up = spawnSync(
@@ -67,7 +67,7 @@ export async function startPB() {
 		stdio: ['ignore', 'ignore', 'pipe'],
 		// Small page size so cascade tests with a handful of items still exercise
 		// the multi-page offset loop in the group-delete fixup hook.
-		env: { ...process.env, GROUP_FIXUP_PAGE: '3' },
+		env: { ...process.env, GROUP_FIXUP_PAGE: '3', ...extraEnv },
 	})
 	proc.stderr.on('data', (d) => (stderr += d.toString()))
 
