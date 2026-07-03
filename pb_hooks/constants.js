@@ -29,6 +29,23 @@ const DRY_MODE = $os.getenv('DRY_MODE') === 'true'
 /** Email notification throttle (minutes) — max 1 email per recipient within this window */
 const MAIL_THROTTLE_MINUTES = parseInt($os.getenv('MAIL_THROTTLE_MINUTES') || '15')
 
+/**
+ * Integration sync cron jobs — the backend periodically POSTs to the SvelteKit
+ * frontend's bearer-protected /api/sync and /api/refresh endpoints, which pull
+ * institutional catalogues from their external lending software.
+ */
+/** SvelteKit frontend origin (no trailing slash), e.g. "https://allerleih.org" */
+const FRONTEND_URL = ($os.getenv('FRONTEND_URL') || '').replace(/\/+$/, '')
+/** Bearer token for /api/sync + /api/refresh — must equal the frontend's SYNC_SECRET */
+const SYNC_SECRET = $os.getenv('SYNC_SECRET') || ''
+/** Cron expression for the full catalogue pull (POST /api/sync); empty = job disabled */
+const SYNC_CRON = $os.getenv('SYNC_CRON') || ''
+/** Cron expression for the per-item refresh (POST /api/refresh); empty = job disabled */
+const REFRESH_CRON = $os.getenv('REFRESH_CRON') || ''
+/** HTTP timeout for the sync/refresh calls — a full sync can take minutes (the frontend
+ * batches creates 15-at-a-time with 5.5s pauses to stay under PocketBase rate limits) */
+const SYNC_TIMEOUT_SECONDS = parseInt($os.getenv('SYNC_TIMEOUT_SECONDS') || '540')
+
 module.exports = {
     LOG_LEVEL,
     VAPID_PUBLIC_KEY,
@@ -37,4 +54,9 @@ module.exports = {
     ORS_API_KEY,
     DRY_MODE,
     MAIL_THROTTLE_MINUTES,
+    FRONTEND_URL,
+    SYNC_SECRET,
+    SYNC_CRON,
+    REFRESH_CRON,
+    SYNC_TIMEOUT_SECONDS,
 }

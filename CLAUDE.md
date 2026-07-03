@@ -40,10 +40,12 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── legal.pb.js              # platform legal consent (#399): /api/legal/accept|decline (superuser,
 │                            #   server-authoritative), users-create consent stamping, locked-user guard
 ├── notification.pb.js       # messages → in-app notification + throttled email
+├── integration_sync.pb.js   # cron jobs POSTing the frontend's /api/sync + /api/refresh (see below)
 ├── services/                # shared business logic: group.js, notification.js, mail.js
 ├── utils/                   # common.js (nowIso, formatDateTime, uniqueBy), db.js
 ├── views/                   # email HTML templates (layout.html + mail/)
-├── jobs/  routes/           # placeholders — cron jobs / routes currently live in *.pb.js
+├── jobs/                    # cron job bodies: integrationSync.js
+├── routes/                  # placeholder — routes currently live in *.pb.js
 pb_migrations/               # <timestamp>_<description>.js — schema, applied in filename order
 pb_public/                   # static assets served by PocketBase
 tests/                       # *.test.mjs integration tests + harness.mjs
@@ -197,9 +199,24 @@ All env/config is centralized here; most have safe defaults:
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | `VAPID_*` | — / `mailto:allerleih@posteo.de` | Web-push |
 | `DRY_MODE` | `DRY_MODE` | `false` | When `true`, skips sending email/notifications (local dev) |
 | `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
+| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — target of the sync/refresh cron calls |
+| `SYNC_SECRET` | `SYNC_SECRET` | `''` | Bearer token for the frontend's `/api/sync` + `/api/refresh`; must equal the frontend's `SYNC_SECRET` |
+| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull (`POST /api/sync`); empty disables the job |
+| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh (`POST /api/refresh`); empty disables the job |
+| `SYNC_TIMEOUT_SECONDS` | `SYNC_TIMEOUT_SECONDS` | `540` | HTTP timeout for the sync/refresh calls (a full sync can take minutes) |
 
 Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
 geocoding, and email don't work for real.
+
+## Cron jobs (`integration_sync.pb.js` + `jobs/integrationSync.js`)
+
+When `SYNC_CRON` / `REFRESH_CRON` are set (and `FRONTEND_URL` + `SYNC_SECRET` are present), the
+backend registers the cron jobs `integration_sync` and `integration_refresh`, which POST the
+frontend's bearer-protected integration endpoints on that schedule. A misconfigured job (cron set
+but URL/secret missing) logs an error and is not scheduled; `DRY_MODE` skips the outbound call.
+Superusers can inspect and manually fire the jobs in the admin UI (Settings → Crons) or via
+`GET /api/crons` / `POST /api/crons/{id}` — the tests use the latter. Operational details live in
+the frontend repo: `docs/operations/integration-sync.md`.
 
 ## Keeping this file in sync
 
