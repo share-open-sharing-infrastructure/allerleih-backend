@@ -113,6 +113,54 @@ onRecordCreate((e) => {
     e.next()
 }, 'group_members')
 
+// When a member leaves or is removed from a group, un-share THAT member's items
+// from the group. Otherwise the items stay visible to the group's members but
+// break on request ("Anfragen") because the owner is no longer a member, and the
+// ex-member can no longer reach the group to un-share them. Only fires for
+// explicit membership deletes (owner-removes / member-leaves): group and user
+// cascade deletes happen at the SQLite FK level and don't trigger hooks, so the
+// whole-group teardown stays owned by the group-delete fixup above.
+onRecordDelete((e) => {
+    const gid = e.record.getString('group')
+    const uid = e.record.getString('user')
+    if (!gid || !uid) {
+        e.next()
+        return
+    }
+    try {
+        const PAGE = parseInt($os.getenv('GROUP_FIXUP_PAGE')) || 200
+        for (;;) {
+            // Each processed item drops out of the `groups.id ?= gid` filter once gid
+            // is removed, so always page from offset 0 until none remain.
+            const items = e.app.findRecordsByFilter(
+                'items',
+                'owner = {:u} && groups.id ?= {:g}',
+                '',
+                PAGE,
+                0,
+                { u: uid, g: gid },
+            )
+            if (items.length === 0) break
+            for (const it of items) {
+                const grps = Array.from(it.get('groups') || []).filter((x) => x !== gid)
+                it.set('groups', grps)
+                // Mirror the group-delete fixup: never let removing the sole group
+                // silently turn a group-only item public.
+                if (grps.length === 0 && !it.get('trusteesOnly')) {
+                    it.set('trusteesOnly', true)
+                }
+                e.app.save(it)
+            }
+        }
+    } catch (err) {
+        // Fail safe: if the un-share can't complete, abort the membership delete
+        // rather than leave the items in the broken shared state.
+        e.app.logger().error('[group-member-remove-fixup] aborting membership delete', 'error', String(err))
+        throw err
+    }
+    e.next()
+}, 'group_members')
+
 // Public preview: show who you've been invited to join before logging in.
 routerAdd('GET', '/api/group-invite/{token}', (e) => {
     const { resolveInvite } = require(`${__hooks}/services/group.js`)
