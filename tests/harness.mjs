@@ -49,6 +49,9 @@ async function waitForHealth(tries = 60) {
  * Start a fresh PocketBase: wipe the test dir, create the superuser (this also
  * applies migrations), serve, and authenticate as superuser for seeding.
  * Returns the child process — pass it to stopPB() in an after() hook.
+ *
+ * @param {Record<string, string>} extraEnv - Extra environment variables for the
+ *   server process (e.g. SYNC_CRON for the integration-sync cron tests).
  */
 export async function startPB(extraEnv = {}) {
 	rmSync(DIR, { recursive: true, force: true })
@@ -99,7 +102,8 @@ export function adminAuth() {
 /** Kill the instance and remove the throwaway data dir. */
 export function stopPB(proc) {
 	if (proc) proc.kill('SIGKILL')
-	rmSync(DIR, { recursive: true, force: true })
+	// Retry EBUSY/EPERM: on Windows the SQLite file locks outlive the kill briefly.
+	rmSync(DIR, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 }
 
 /**
