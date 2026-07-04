@@ -199,7 +199,7 @@ All env/config is centralized here; most have safe defaults:
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | `VAPID_*` | — / `mailto:allerleih@posteo.de` | Web-push |
 | `DRY_MODE` | `DRY_MODE` | `false` | When `true`, skips sending email/notifications (local dev) |
 | `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
-| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — target of the sync/refresh cron calls |
+| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — target of the sync/refresh cron calls. **Must be `https://` unless loopback** — the sync secret travels as a Bearer header (non-loopback `http://` logs a startup warning) |
 | `SYNC_SECRET` | `SYNC_SECRET` | `''` | Bearer token for the frontend's `/api/sync` + `/api/refresh`; must equal the frontend's `SYNC_SECRET` |
 | `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull (`POST /api/sync`); empty disables the job |
 | `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh (`POST /api/refresh`); empty disables the job |
@@ -213,7 +213,8 @@ geocoding, and email don't work for real.
 When `SYNC_CRON` / `REFRESH_CRON` are set (and `FRONTEND_URL` + `SYNC_SECRET` are present), the
 backend registers the cron jobs `integration_sync` and `integration_refresh`, which POST the
 frontend's bearer-protected integration endpoints on that schedule. A misconfigured job (cron set
-but URL/secret missing) logs an error and is not scheduled; `DRY_MODE` skips the outbound call.
+but URL/secret missing, or a syntactically invalid cron expression) logs an error and is not
+scheduled without affecting the sibling job; `DRY_MODE` skips the outbound call.
 Superusers can inspect and manually fire the jobs in the admin UI (Settings → Crons) or via
 `GET /api/crons` / `POST /api/crons/{id}` — the tests use the latter. Operational details live in
 the frontend repo: `docs/operations/integration-sync.md`.

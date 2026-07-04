@@ -44,7 +44,20 @@ function triggerIntegrationEndpoint(label, path) {
         return
     }
 
-    const summaries = (res.json || {}).summaries || []
+    // A 200 with a non-JSON body (a reverse proxy or SPA shell answering the
+    // request) yields a falsy/non-object res.json — without this check it would
+    // masquerade as a successful "no institutions configured" run.
+    let json
+    try {
+        json = res.json
+    } catch (err) {
+        json = null
+    }
+    if (!json || typeof json !== 'object') {
+        $app.logger().error(`${logPrefix} invalid JSON body`, 'body', String(res.raw).slice(0, 500))
+        return
+    }
+    const summaries = json.summaries || []
     if (summaries.length === 0) {
         $app.logger().info(`${logPrefix} done — no institutions configured`)
         return
