@@ -63,10 +63,33 @@ routerAdd(
     $apis.requireAuth()
 )
 
-// Block authentication for accounts that have been deleted (anonymized).
+// Block authentication for accounts that have been deleted (anonymized), and stamp
+// lastLoginAt for the inactive-account retention job (#461).
 onRecordAuthRequest((e) => {
     if (e.record && e.record.getBool('deleted')) {
         throw new BadRequestError('Dieses Konto wurde gelöscht.')
     }
+
+    // Record activity for the "delete inactive accounts" job. Throttle to once per
+    // 24h: auth-refresh fires on every frontend request, so an unthrottled stamp
+    // would write the user row on every call. Use a raw UPDATE (not record save) so
+    // the stamp doesn't bump `users.updated` or emit a realtime event on every active
+    // user. A stamping failure must never block login, so it is best-effort.
+    if (e.record) {
+        try {
+            const { now, daysAgoIso } = require(`${__hooks}/utils/common.js`)
+            const last = e.record.getString('lastLoginAt')
+            if (!last || last < daysAgoIso(1)) {
+                e.app
+                    .db()
+                    .newQuery('UPDATE users SET lastLoginAt = {:v} WHERE id = {:id}')
+                    .bind({ v: now(), id: e.record.id })
+                    .execute()
+            }
+        } catch (err) {
+            e.app.logger().warn('[account] lastLoginAt stamp failed', 'error', String(err))
+        }
+    }
+
     e.next()
 }, 'users')

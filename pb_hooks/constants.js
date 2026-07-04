@@ -54,6 +54,36 @@ const REFRESH_CRON = $os.getenv('REFRESH_CRON') || ''
  * batches creates 15-at-a-time with 5.5s pauses to stay under PocketBase rate limits) */
 const SYNC_TIMEOUT_SECONDS = intEnv('SYNC_TIMEOUT_SECONDS', 540)
 
+/**
+ * GDPR data-retention windows (#461) — enforced by the nightly jobs in
+ * retention.pb.js. Defaults come from the privacy policy (DSE v2.8). Override per
+ * deployment via env; a value of 0 disables the corresponding job (see retention.js).
+ */
+const RETENTION_INACTIVE_MONTHS = parseInt($os.getenv('RETENTION_INACTIVE_MONTHS') || '6')
+const RETENTION_MESSAGES_MONTHS = parseInt($os.getenv('RETENTION_MESSAGES_MONTHS') || '6')
+const RETENTION_NOTIFICATIONS_DAYS = parseInt($os.getenv('RETENTION_NOTIFICATIONS_DAYS') || '90')
+const RETENTION_FEEDBACK_MONTHS = parseInt($os.getenv('RETENTION_FEEDBACK_MONTHS') || '6')
+
+/**
+ * Where to notify a platform admin when an inactive account is *skipped* because it
+ * still has an open loan (the #461 edge case). Empty => admin mail is skipped (logged).
+ */
+const ADMIN_NOTIFY_EMAIL = $os.getenv('ADMIN_NOTIFY_EMAIL') || ''
+
+/**
+ * Cooldown (days) between repeat "deletion postponed (open loan)" skip notices for the
+ * same account — the job runs nightly, so without this the user + admin would be mailed
+ * every night until the loan closes.
+ */
+const RETENTION_SKIP_NOTICE_COOLDOWN_DAYS = parseInt($os.getenv('RETENTION_SKIP_NOTICE_COOLDOWN_DAYS') || '7')
+
+/**
+ * How many records a retention job processes per page. Keyset-paginated so a large
+ * backlog is never loaded into memory at once. Tests set this low to exercise the
+ * multi-page loop (cf. GROUP_FIXUP_PAGE).
+ */
+const RETENTION_PAGE_SIZE = parseInt($os.getenv('RETENTION_PAGE_SIZE') || '200')
+
 module.exports = {
     LOG_LEVEL,
     VAPID_PUBLIC_KEY,
@@ -67,4 +97,11 @@ module.exports = {
     SYNC_CRON,
     REFRESH_CRON,
     SYNC_TIMEOUT_SECONDS,
+    RETENTION_INACTIVE_MONTHS,
+    RETENTION_MESSAGES_MONTHS,
+    RETENTION_NOTIFICATIONS_DAYS,
+    RETENTION_FEEDBACK_MONTHS,
+    ADMIN_NOTIFY_EMAIL,
+    RETENTION_SKIP_NOTICE_COOLDOWN_DAYS,
+    RETENTION_PAGE_SIZE,
 }

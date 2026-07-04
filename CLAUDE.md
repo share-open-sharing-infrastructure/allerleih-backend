@@ -46,6 +46,13 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── views/                   # email HTML templates (layout.html + mail/)
 ├── jobs/                    # cron job bodies: integrationSync.js
 ├── routes/                  # placeholder — routes currently live in *.pb.js
+├── account.pb.js            # DELETE /api/account + export, deleted-login block, lastLoginAt stamp
+├── retention.pb.js          # GDPR retention cron jobs (#461) + guarded test route
+├── services/                # shared business logic: account.js, group.js, legal.js, notification.js, mail.js
+├── utils/                   # common.js (now, monthsAgoIso, daysAgoIso, formatDateTime, uniqueBy), db.js
+├── views/                   # email HTML templates (layout.html + mail/)
+├── jobs/                    # retention.js — GDPR purge job logic (called from retention.pb.js)
+├── routes/                  # placeholder — routes live in *.pb.js
 pb_migrations/               # <timestamp>_<description>.js — schema, applied in filename order
 pb_public/                   # static assets served by PocketBase
 tests/                       # *.test.mjs integration tests + harness.mjs
@@ -159,6 +166,20 @@ thing (SvelteKit) — these are PocketBase routes:
 | POST | `/api/travel-times` | travel.pb.js | ORS travel-time matrix (user → owners), bucketed to minutes; auth required |
 | POST | `/api/legal/accept` | legal.pb.js | Record the user's acceptance of the active legal docs (snapshot from `legal_documents`), refresh their version cache, clear any lock — transactional, superuser; auth required |
 | POST | `/api/legal/decline` | legal.pb.js | Record rejection of the active legal docs and set `legalLocked` — transactional, superuser; auth required |
+| POST | `/api/_test/run-retention/{job}` | retention.pb.js | Test-only: run a retention job with an explicit `cutoff`. Registered ONLY when `RETENTION_TEST_ROUTE=true`; superuser required. Not present in production |
+
+## Scheduled jobs (`retention.pb.js` + `jobs/retention.js`)
+
+GDPR data-retention (#461, DSE v2.8): four nightly `cronAdd` jobs — inactive accounts (02:00,
+anonymize via `anonymizeAccount`; accounts with an open loan are skipped and user + admin get a
+mail), conversations incl. messages + related notifications (02:10), notifications (02:20),
+feedback (02:30). Windows come from `constants.js` (`RETENTION_*`); a window of `0` disables the
+job, a NaN/negative value is refused (logged, never runs). Per-record failures are isolated (one bad
+row can't abort the batch); jobs are idempotent and log **counts only, never personal data**.
+`users.lastLoginAt` (the inactivity signal) is stamped in `account.pb.js`'s `onRecordAuthRequest`,
+throttled to once per 24h. `users.lastLoginAt` and `users.retentionNotifiedAt` are `hidden: true` —
+the `users` collection is readable by any authenticated user, so these internal fields must never be
+serialized. The open-loan skip notice is deduped via `retentionNotifiedAt` (cooldown).
 
 ## Access control & the public views
 
@@ -204,6 +225,13 @@ All env/config is centralized here; most have safe defaults:
 | `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull (`POST /api/sync`); empty disables the job |
 | `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh (`POST /api/refresh`); empty disables the job |
 | `SYNC_TIMEOUT_SECONDS` | `SYNC_TIMEOUT_SECONDS` | `540` | HTTP timeout for the sync/refresh calls (a full sync can take minutes) |
+| `RETENTION_INACTIVE_MONTHS` | `RETENTION_INACTIVE_MONTHS` | `6` | Anonymize accounts with no login for N months (0 = off) |
+| `RETENTION_MESSAGES_MONTHS` | `RETENTION_MESSAGES_MONTHS` | `6` | Delete conversations N months after last activity (0 = off) |
+| `RETENTION_NOTIFICATIONS_DAYS` | `RETENTION_NOTIFICATIONS_DAYS` | `90` | Delete in-app notifications after N days (0 = off) |
+| `RETENTION_FEEDBACK_MONTHS` | `RETENTION_FEEDBACK_MONTHS` | `6` | Delete feedback entries after N months (0 = off) |
+| `ADMIN_NOTIFY_EMAIL` | `ADMIN_NOTIFY_EMAIL` | — | Admin recipient for the "inactive account skipped (open loan)" notice |
+| `RETENTION_SKIP_NOTICE_COOLDOWN_DAYS` | `RETENTION_SKIP_NOTICE_COOLDOWN_DAYS` | `7` | Min days between repeat skip notices for the same account |
+| `RETENTION_PAGE_SIZE` | `RETENTION_PAGE_SIZE` | `200` | Records per keyset-paginated batch in the retention jobs (tests set it low) |
 
 Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
 geocoding, and email don't work for real.
