@@ -210,6 +210,14 @@ become public — so the hook flips those items to `trusteesOnly = true`, and ro
 the flip fails. A raw DB-level cascade (e.g. deleting the owner) bypasses this hook — keep that in
 mind before adding user-deletion features.
 
+The second delete hook is **member removal / leaving** (`onRecordDelete` on `group_members` in
+`group.pb.js`): when a membership is deleted explicitly (owner removes a member, or a member
+leaves), that member's items are un-shared from the group — otherwise they stay visible to the
+group but break on request (the owner is no longer a member) and the ex-member can't reach the
+group to un-share them. Same fail-safe + `trusteesOnly` flip as the group-delete fixup. It fires
+**only for explicit membership deletes**: group/user cascade deletes are DB-level and don't trigger
+hooks, so the whole-group teardown stays owned by the group-delete fixup.
+
 ## Configuration (`pb_hooks/constants.js`)
 
 All env/config is centralized here; most have safe defaults:
