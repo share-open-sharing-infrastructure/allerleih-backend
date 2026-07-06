@@ -23,8 +23,9 @@ routerAdd(
         let trusted = me === userId
         if (!trusted && me) {
             try {
-                const owner = $app.findRecordById('users', userId)
-                trusted = (owner.get('trusts') || []).indexOf(me) !== -1
+                // The owner trusts the caller iff a trusts edge {truster: owner, trustee: me} exists.
+                $app.findFirstRecordByFilter('trusts', 'truster = {:o} && trustee = {:m}', { o: userId, m: me })
+                trusted = true
             } catch (_) {}
         }
 

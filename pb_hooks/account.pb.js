@@ -3,9 +3,10 @@
 // Self-service GDPR endpoints for the authenticated user:
 //   DELETE /api/account         — erase/anonymize the own account (Art. 17)
 //   GET    /api/account/export  — machine-readable copy of the own data (Art. 15/20)
-// Both run with superuser `$app` access because anonymization must edit other users'
-// records (trusts[]) and the export reads across collections. Login for an already
-// deleted account is blocked via onRecordAuthRequest below.
+// Both run with superuser `$app` access because anonymization must delete records
+// owned by other users (e.g. `trusts` edges) and the export reads across
+// collections. Login for an already deleted account is blocked via
+// onRecordAuthRequest below.
 
 routerAdd(
     'DELETE',
