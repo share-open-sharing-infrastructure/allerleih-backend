@@ -54,18 +54,16 @@ onRecordAfterCreateSuccess((e) => {
     // the conversation page is open. If the timestamp is within the last 30 seconds,
     // the recipient is actively viewing — skip the email.
     try {
-        const conversation = $app.findFirstRecordByFilter(
-            'conversations',
-            '(requester = {:recipientId} || itemOwner = {:recipientId}) && (requester = {:senderId} || itemOwner = {:senderId})',
-            { recipientId: recipientId, senderId: senderId }
-        )
-        if (conversation) {
+        const conversationId = message.get('conversation')
+        if (conversationId) {
+            const conversation = $app.findRecordById('conversations', conversationId)
             const recipientIsRequester = conversation.get('requester') === recipientId
             const lastSeenStr = recipientIsRequester
                 ? conversation.get('requesterLastSeenAt')
                 : conversation.get('ownerLastSeenAt')
             if (lastSeenStr) {
-                const lastSeen = new Date(lastSeenStr).getTime()
+                // PocketBase dates use space separator; normalize to ISO 8601 for safe parsing
+                const lastSeen = new Date(String(lastSeenStr).replace(' ', 'T')).getTime()
                 const now = Date.now()
                 if (now - lastSeen < 30000) {
                     $app.logger().debug(
@@ -78,7 +76,7 @@ onRecordAfterCreateSuccess((e) => {
             }
         }
     } catch (err) {
-        // Conversation not found — proceed with email (e.g. edge case)
+        // Conversation not found or no conversation field — proceed with email
     }
 
     // Check if recipient has opted out of email notifications.
