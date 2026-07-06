@@ -2,9 +2,15 @@
 
 // Drop the now-unused users.trusts[] multi-relation. Must run LAST: after the data
 // copy (1783500002) and after every rule that traversed it was repointed at the
-// `trusts` join (1783500003). down re-adds the field (mirroring the baseline
-// snapshot config) and repopulates it from the join rows, so a single
-// `migrate down 1` fully restores the old shape.
+// `trusts` join (1783500003).
+//
+// down() re-adds the field (mirroring the baseline snapshot config) and repopulates
+// it from the join rows — but it does NOT restore the visibility rules, which are
+// owned by 1783500003. So `down 1` alone leaves a hybrid DB (users.trusts is back,
+// but the item/items_searchable/conversations rules still traverse the `trusts`
+// join, so a grant written by an old frontend into users.trusts[] confers no
+// visibility). Roll back at least `down 2` (through 1783500003) to restore correct
+// visibility; `down 4` (through 1783500001) for the exact pre-join shape.
 migrate(
     (app) => {
         const c = app.findCollectionByNameOrId('hbacudkt08pfcy3')

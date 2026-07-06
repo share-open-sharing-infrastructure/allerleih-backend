@@ -3,7 +3,12 @@
 // Copy every users.trusts[] entry into a `trusts` join row (truster = the user,
 // trustee = each id in their list). Idempotent: skips self-references and rows
 // that already exist. Runs after the collection is created and before the field
-// is dropped.
+// is dropped. Per-edge failures (e.g. a dangling trustee id) are skipped, never
+// fatal, so one bad edge can't abort the whole one-shot copy.
+//
+// NOTE: the test harness applies migrations to an EMPTY users table, so this copy
+// loop is not exercised by `npm test` — its correctness rests on this code + the
+// idempotency/robustness guards below.
 migrate(
     (app) => {
         const col = app.findCollectionByNameOrId('pbc_trusts00001')
@@ -18,10 +23,19 @@ migrate(
                 } catch (_) {
                     // not present yet — create it
                 }
-                const rec = new Record(col)
-                rec.set('truster', u.id)
-                rec.set('trustee', tid)
-                app.save(rec)
+                try {
+                    const rec = new Record(col)
+                    rec.set('truster', u.id)
+                    rec.set('trustee', tid)
+                    app.save(rec)
+                } catch (err) {
+                    // A dangling/invalid trustee id must not abort the whole copy — skip it.
+                    try {
+                        app.logger().warn('trusts data migration: skipped invalid edge', 'truster', u.id, 'trustee', tid)
+                    } catch (_) {
+                        /* logging is best-effort */
+                    }
+                }
             }
         }
     },

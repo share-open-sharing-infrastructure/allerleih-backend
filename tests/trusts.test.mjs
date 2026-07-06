@@ -130,24 +130,31 @@ test('GDPR export reports the trust graph from the join', async () => {
 test('contact handles gated by trust use the join: only a trustee sees a trusted-only handle', async () => {
 	const owner = await makeUser('handleowner')
 	const caller = await makeUser('handlecaller')
-	// owner publishes a telegram handle, visible to trusted only
+	// owner publishes BOTH a telegram and a signal handle, each visible to trusted only
+	// (the two branches are independent lookups in contact.pb.js, so assert both).
 	const c = await api('POST', '/api/collections/user_contacts/records', owner.t, {
 		user: owner.id,
 		telegramUsername: 'owner_tg',
 		telegramVisibleToTrustedOnly: true,
+		signalLink: 'https://signal.me/#p/owner',
+		signalVisibleToTrustedOnly: true,
 	})
 	assert.equal(c.status, 200)
 
-	// not trusted yet -> withheld
+	// not trusted yet -> both handles withheld
 	let res = await api('GET', `/api/contact/${owner.id}`, caller.t)
 	assert.equal(res.status, 200)
-	assert.equal(res.json.telegramUsername, null, 'handle withheld from non-trustee')
-	assert.equal(res.json.telegramHidden, true, 'signalled as hidden')
+	assert.equal(res.json.telegramUsername, null, 'telegram withheld from non-trustee')
+	assert.equal(res.json.telegramHidden, true, 'telegram signalled as hidden')
+	assert.equal(res.json.signalLink, null, 'signal withheld from non-trustee')
+	assert.equal(res.json.signalHidden, true, 'signal signalled as hidden')
 
-	// owner trusts caller -> revealed
+	// owner trusts caller -> both handles revealed
 	assert.equal((await createEdge(owner, owner.id, caller.id)).status, 200)
 	res = await api('GET', `/api/contact/${owner.id}`, caller.t)
 	assert.equal(res.status, 200)
-	assert.equal(res.json.telegramUsername, 'owner_tg', 'handle revealed to trustee')
+	assert.equal(res.json.telegramUsername, 'owner_tg', 'telegram revealed to trustee')
 	assert.equal(res.json.telegramHidden, false)
+	assert.equal(res.json.signalLink, 'https://signal.me/#p/owner', 'signal revealed to trustee')
+	assert.equal(res.json.signalHidden, false)
 })
