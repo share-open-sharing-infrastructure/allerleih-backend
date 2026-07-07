@@ -237,8 +237,13 @@ cronAdd('weekly_digest', '0 12 * * 0', () => {
                 trustedItems.push(item)
             } else if (isInItemGroup) {
                 groupItems.push(item)
-            } else {
+            } else if (!isTrusteesOnly && itemGroupList.length === 0) {
                 publicItems.push(item)
+            } else {
+                // trusteesOnly item visible only because the owner trusts us
+                // (we don't trust them back, and it isn't group-shared) — it is
+                // NOT public, so keep it out of "Neu auf der Plattform".
+                trustedItems.push(item)
             }
         }
 
