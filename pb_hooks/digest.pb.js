@@ -30,7 +30,7 @@ cronAdd('weekly_digest', '0 12 * * 0', () => {
             .replace(/"/g, '&quot;')
     }
 
-    function renderItemList(items, max, ownerNames) {
+    function renderItemList(items, max, ownerNames, allowUploadedImages) {
         if (!items || items.length === 0) return ''
 
         const appUrl = $app.settings().meta.appURL || 'https://allerleih.org'
@@ -44,16 +44,19 @@ cronAdd('weekly_digest', '0 12 * * 0', () => {
             const categoryStr = Array.isArray(categories) && categories.length > 0
                 ? categories.join(', ')
                 : ''
-            const itemUrl = 'https://allerleih.org/items/' + item.id
+            const itemUrl = appUrl + '/items/' + item.id
             const ownerId = item.get('owner')
             const ownerName = ownerNames[ownerId] || ''
 
-            // Resolve image URL: prefer uploaded file, fall back to externalImgUrl
+            // Resolve image URL:
+            // - Uploaded files are behind auth, so only include them for public items
+            // - externalImgUrl is always accessible (external host, no auth)
             let imgUrl = ''
-            const imageFile = item.get('image')
+            const imageFiles = item.get('image') || []
+            const images = Array.isArray(imageFiles) ? imageFiles : [imageFiles]
             const externalImg = item.get('externalImgUrl')
-            if (imageFile) {
-                imgUrl = appUrl + '/api/files/items/' + item.id + '/' + imageFile
+            if (allowUploadedImages && images.length > 0 && images[0]) {
+                imgUrl = appUrl + '/api/files/items/' + item.id + '/' + images[0]
             } else if (externalImg) {
                 imgUrl = externalImg
             }
@@ -70,7 +73,7 @@ cronAdd('weekly_digest', '0 12 * * 0', () => {
                 html += '<span style="color: #6B6B6B; font-size: 13px;">von ' + escapeHtml(ownerName) + '</span><br>'
             }
             if (categoryStr) {
-                html += '<span style="color: #6B6B6B; font-size: 13px;">' + categoryStr + '</span><br>'
+                html += '<span style="color: #6B6B6B; font-size: 13px;">' + escapeHtml(categoryStr) + '</span><br>'
             }
             html += '<a href="' + itemUrl + '" style="color: #5B6EC7; font-size: 13px; text-decoration: underline;">Ansehen &rarr;</a>'
             html += '</td>'
@@ -87,68 +90,89 @@ cronAdd('weekly_digest', '0 12 * * 0', () => {
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
     const cutoffStr = cutoff.toISOString().replace('T', ' ')
 
-    // Fetch all items created in the last 7 days
-    let newItems
+    const PAGE = 200
+
+    // Fetch all items created in the last 7 days (paginated)
+    const newItems = []
     try {
-        newItems = $app.findRecordsByFilter(
-            'items',
-            'created > {:cutoff}',
-            '-created',
-            0, // no limit
-            0,
-            { cutoff: cutoffStr }
-        )
+        let offset = 0
+        for (;;) {
+            const batch = $app.findRecordsByFilter(
+                'items',
+                'created > {:cutoff}',
+                '-created',
+                PAGE,
+                offset,
+                { cutoff: cutoffStr }
+            )
+            for (const item of batch) newItems.push(item)
+            if (batch.length < PAGE) break
+            offset += PAGE
+        }
     } catch (err) {
-        $app.logger().info('[digest] No new items this week')
+        $app.logger().error('[digest] Failed to fetch new items', 'error', err.toString())
         return
     }
 
-    if (!newItems || newItems.length === 0) {
+    if (newItems.length === 0) {
         $app.logger().info('[digest] No new items this week, skipping digest')
         return
     }
 
-    // Fetch all users (excluding deleted accounts)
-    let users
+    // Fetch all users excluding deleted accounts (paginated)
+    const users = []
     try {
-        users = $app.findRecordsByFilter('users', 'deleted = false', '', 0, 0)
+        let offset = 0
+        for (;;) {
+            const batch = $app.findRecordsByFilter('users', 'deleted = false', '', PAGE, offset)
+            for (const u of batch) users.push(u)
+            if (batch.length < PAGE) break
+            offset += PAGE
+        }
     } catch (err) {
         $app.logger().error('[digest] Failed to fetch users', 'error', err.toString())
         return
     }
 
-    // Build a map of userId -> username for item owner display
+    // Build a map of userId -> user record (for owner trust lookups + username)
+    const usersById = {}
     const ownerNames = {}
     for (const u of users) {
+        usersById[u.id] = u
         ownerNames[u.id] = u.get('username') || ''
     }
 
-    // Build a set of users who opted out of email notifications
+    // Build a set of users who opted out of email notifications (paginated)
     const optedOut = new Set()
     try {
-        const prefs = $app.findRecordsByFilter('user_preferences', 'emailNotifications = false', '', 0, 0)
-        for (const p of prefs) {
-            optedOut.add(p.get('user'))
+        let offset = 0
+        for (;;) {
+            const batch = $app.findRecordsByFilter('user_preferences', 'emailNotifications = false', '', PAGE, offset)
+            for (const p of batch) optedOut.add(p.get('user'))
+            if (batch.length < PAGE) break
+            offset += PAGE
         }
     } catch (err) {
         // No prefs found or collection empty — everyone is opted in
     }
 
-    // Pre-compute: group memberships per user
-    let allMemberships
-    try {
-        allMemberships = $app.findRecordsByFilter('group_members', 'id != ""', '', 0, 0)
-    } catch (err) {
-        allMemberships = []
-    }
-
-    // Map: userId -> Set of groupIds they belong to
+    // Pre-compute: group memberships per user (paginated)
     const userGroups = {}
-    for (const m of allMemberships) {
-        const userId = m.get('user')
-        const groupId = m.get('group')
-        if (!userGroups[userId]) userGroups[userId] = new Set()
-        userGroups[userId].add(groupId)
+    try {
+        let offset = 0
+        for (;;) {
+            const batch = $app.findRecordsByFilter('group_members', 'id != ""', '', PAGE, offset)
+            for (const m of batch) {
+                const userId = m.get('user')
+                const groupId = m.get('group')
+                if (!userGroups[userId]) userGroups[userId] = new Set()
+                userGroups[userId].add(groupId)
+            }
+            if (batch.length < PAGE) break
+            offset += PAGE
+        }
+    } catch (err) {
+        // No memberships — group sections will be empty
     }
 
     let sentCount = 0
@@ -184,29 +208,36 @@ cronAdd('weekly_digest', '0 12 * * 0', () => {
             const itemGroups = item.get('groups') || []
             const itemGroupList = Array.isArray(itemGroups) ? itemGroups : [itemGroups]
 
-            // Check if from a trusted person
+            // --- Visibility check first ---
+            // Determine if this user is allowed to see the item at all.
+            // The owner's trust list controls trusteesOnly visibility.
+            const ownerRecord = usersById[ownerId]
+            const ownerTrusts = ownerRecord ? ownerRecord.get('trusts') || [] : []
+            const ownerTrustSet = new Set(Array.isArray(ownerTrusts) ? ownerTrusts : [ownerTrusts])
+
+            const isInItemGroup = itemGroupList.length > 0 && itemGroupList.some(gId => myGroups.has(gId))
+
+            let canSee = false
+            if (!isTrusteesOnly && itemGroupList.length === 0) {
+                // Public item — visible to everyone
+                canSee = true
+            } else if (isTrusteesOnly && ownerTrustSet.has(userId)) {
+                // trusteesOnly — visible only if the owner trusts this user
+                canSee = true
+            } else if (itemGroupList.length > 0 && isInItemGroup) {
+                // Group-only — visible if user is in one of the item's groups
+                canSee = true
+            }
+
+            if (!canSee) continue
+
+            // --- Categorize into sections ---
+            // Priority: trusted person > group > public
             if (trustedSet.has(ownerId)) {
                 trustedItems.push(item)
-                continue
-            }
-
-            // Check if from a group the user belongs to
-            if (itemGroupList.length > 0) {
-                let inGroup = false
-                for (const gId of itemGroupList) {
-                    if (myGroups.has(gId)) {
-                        inGroup = true
-                        break
-                    }
-                }
-                if (inGroup) {
-                    groupItems.push(item)
-                    continue
-                }
-            }
-
-            // Public items: not trusteesOnly and not group-only
-            if (!isTrusteesOnly && itemGroupList.length === 0) {
+            } else if (isInItemGroup) {
+                groupItems.push(item)
+            } else {
                 publicItems.push(item)
             }
         }
@@ -217,9 +248,11 @@ cronAdd('weekly_digest', '0 12 * * 0', () => {
         }
 
         // Render item lists as HTML (max 5 per section)
-        const trustedHtml = renderItemList(trustedItems, 5, ownerNames)
-        const groupHtml = renderItemList(groupItems, 5, ownerNames)
-        const publicHtml = renderItemList(publicItems, 5, ownerNames)
+        // Only public items get uploaded-file thumbnails (no auth required);
+        // trusted/group items only show externalImgUrl (auth-gated files would 403 in email clients)
+        const trustedHtml = renderItemList(trustedItems, 5, ownerNames, false)
+        const groupHtml = renderItemList(groupItems, 5, ownerNames, false)
+        const publicHtml = renderItemList(publicItems, 5, ownerNames, true)
 
         const body = $template
             .loadFiles(`${__hooks}/views/mail/weekly_digest.html`)
