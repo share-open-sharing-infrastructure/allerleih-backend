@@ -56,7 +56,7 @@ cronAdd('weekly_digest', '0 12 * * 0', () => {
             const images = Array.isArray(imageFiles) ? imageFiles : [imageFiles]
             const externalImg = item.get('externalImgUrl')
             if (allowUploadedImages && images.length > 0 && images[0]) {
-                imgUrl = appUrl + '/api/files/items/' + item.id + '/' + images[0]
+                imgUrl = appUrl + '/api/files/items_public/' + item.id + '/' + images[0]
             } else if (externalImg) {
                 imgUrl = externalImg
             }
