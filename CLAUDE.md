@@ -41,10 +41,19 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── legal.pb.js              # platform legal consent (#399): /api/legal/accept|decline (superuser,
 │                            #   server-authoritative), users-create consent stamping, locked-user guard
 ├── notification.pb.js       # messages → in-app notification + throttled email
+├── integration_sync.pb.js   # cron jobs POSTing the frontend's /api/sync + /api/refresh (see below)
 ├── services/                # shared business logic: group.js, notification.js, mail.js
 ├── utils/                   # common.js (nowIso, formatDateTime, uniqueBy), db.js
 ├── views/                   # email HTML templates (layout.html + mail/)
-├── jobs/  routes/           # placeholders — cron jobs / routes currently live in *.pb.js
+├── jobs/                    # cron job bodies: integrationSync.js
+├── routes/                  # placeholder — routes currently live in *.pb.js
+├── account.pb.js            # DELETE /api/account + export, deleted-login block, lastLoginAt stamp
+├── retention.pb.js          # GDPR retention cron jobs (#461) + guarded test route
+├── services/                # shared business logic: account.js, group.js, legal.js, notification.js, mail.js
+├── utils/                   # common.js (now, monthsAgoIso, daysAgoIso, formatDateTime, uniqueBy), db.js
+├── views/                   # email HTML templates (layout.html + mail/)
+├── jobs/                    # retention.js — GDPR purge job logic (called from retention.pb.js)
+├── routes/                  # placeholder — routes live in *.pb.js
 pb_migrations/               # <timestamp>_<description>.js — schema, applied in filename order
 pb_public/                   # static assets served by PocketBase
 tests/                       # *.test.mjs integration tests + harness.mjs
@@ -158,6 +167,20 @@ thing (SvelteKit) — these are PocketBase routes:
 | POST | `/api/travel-times` | travel.pb.js | ORS travel-time matrix (user → owners), bucketed to minutes; auth required |
 | POST | `/api/legal/accept` | legal.pb.js | Record the user's acceptance of the active legal docs (snapshot from `legal_documents`), refresh their version cache, clear any lock — transactional, superuser; auth required |
 | POST | `/api/legal/decline` | legal.pb.js | Record rejection of the active legal docs and set `legalLocked` — transactional, superuser; auth required |
+| POST | `/api/_test/run-retention/{job}` | retention.pb.js | Test-only: run a retention job with an explicit `cutoff`. Registered ONLY when `RETENTION_TEST_ROUTE=true`; superuser required. Not present in production |
+
+## Scheduled jobs (`retention.pb.js` + `jobs/retention.js`)
+
+GDPR data-retention (#461, DSE v2.8): four nightly `cronAdd` jobs — inactive accounts (02:00,
+anonymize via `anonymizeAccount`; accounts with an open loan are skipped and user + admin get a
+mail), conversations incl. messages + related notifications (02:10), notifications (02:20),
+feedback (02:30). Windows come from `constants.js` (`RETENTION_*`); a window of `0` disables the
+job, a NaN/negative value is refused (logged, never runs). Per-record failures are isolated (one bad
+row can't abort the batch); jobs are idempotent and log **counts only, never personal data**.
+`users.lastLoginAt` (the inactivity signal) is stamped in `account.pb.js`'s `onRecordAuthRequest`,
+throttled to once per 24h. `users.lastLoginAt` and `users.retentionNotifiedAt` are `hidden: true` —
+the `users` collection is readable by any authenticated user, so these internal fields must never be
+serialized. The open-loan skip notice is deduped via `retentionNotifiedAt` (cooldown).
 
 ## Access control & the public views
 
@@ -188,6 +211,14 @@ become public — so the hook flips those items to `trusteesOnly = true`, and ro
 the flip fails. A raw DB-level cascade (e.g. deleting the owner) bypasses this hook — keep that in
 mind before adding user-deletion features.
 
+The second delete hook is **member removal / leaving** (`onRecordDelete` on `group_members` in
+`group.pb.js`): when a membership is deleted explicitly (owner removes a member, or a member
+leaves), that member's items are un-shared from the group — otherwise they stay visible to the
+group but break on request (the owner is no longer a member) and the ex-member can't reach the
+group to un-share them. Same fail-safe + `trusteesOnly` flip as the group-delete fixup. It fires
+**only for explicit membership deletes**: group/user cascade deletes are DB-level and don't trigger
+hooks, so the whole-group teardown stays owned by the group-delete fixup.
+
 ## Configuration (`pb_hooks/constants.js`)
 
 All env/config is centralized here; most have safe defaults:
@@ -198,12 +229,35 @@ All env/config is centralized here; most have safe defaults:
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | `VAPID_*` | — / `mailto:allerleih@posteo.de` | Web-push |
 | `DRY_MODE` | `DRY_MODE` | `false` | When `true`, skips sending email/notifications (local dev) |
 | `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
+| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — target of the sync/refresh cron calls. **Must be `https://` unless loopback** — the sync secret travels as a Bearer header (non-loopback `http://` logs a startup warning) |
+| `SYNC_SECRET` | `SYNC_SECRET` | `''` | Bearer token for the frontend's `/api/sync` + `/api/refresh`; must equal the frontend's `SYNC_SECRET` |
+| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull (`POST /api/sync`); empty disables the job |
+| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh (`POST /api/refresh`); empty disables the job |
+| `SYNC_TIMEOUT_SECONDS` | `SYNC_TIMEOUT_SECONDS` | `540` | HTTP timeout for the sync/refresh calls (a full sync can take minutes) |
+| `RETENTION_INACTIVE_MONTHS` | `RETENTION_INACTIVE_MONTHS` | `6` | Anonymize accounts with no login for N months (0 = off) |
+| `RETENTION_MESSAGES_MONTHS` | `RETENTION_MESSAGES_MONTHS` | `6` | Delete conversations N months after last activity (0 = off) |
+| `RETENTION_NOTIFICATIONS_DAYS` | `RETENTION_NOTIFICATIONS_DAYS` | `90` | Delete in-app notifications after N days (0 = off) |
+| `RETENTION_FEEDBACK_MONTHS` | `RETENTION_FEEDBACK_MONTHS` | `6` | Delete feedback entries after N months (0 = off) |
+| `ADMIN_NOTIFY_EMAIL` | `ADMIN_NOTIFY_EMAIL` | — | Admin recipient for the "inactive account skipped (open loan)" notice |
+| `RETENTION_SKIP_NOTICE_COOLDOWN_DAYS` | `RETENTION_SKIP_NOTICE_COOLDOWN_DAYS` | `7` | Min days between repeat skip notices for the same account |
+| `RETENTION_PAGE_SIZE` | `RETENTION_PAGE_SIZE` | `200` | Records per keyset-paginated batch in the retention jobs (tests set it low) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | `SMTP_*` | — / `587` / — / — | SMTP server applied on bootstrap by `mail_config.pb.js` **only when `SMTP_HOST` is set** (idempotent). Empty `SMTP_HOST` = no-op: existing admin-UI settings are left untouched (never disabled/cleared) |
 | `SMTP_TLS` / `SMTP_AUTH_METHOD` / `SMTP_LOCAL_NAME` | `SMTP_*` | `false` / `PLAIN` / — | `SMTP_TLS=true` = implicit TLS (465); `false` = STARTTLS (587) |
 | `SENDER_ADDRESS` / `SENDER_NAME` / `APP_URL` | same | — | Optional overrides of the `meta` mail settings; only applied when set |
 
 Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
 geocoding, and email don't work for real.
+
+## Cron jobs (`integration_sync.pb.js` + `jobs/integrationSync.js`)
+
+When `SYNC_CRON` / `REFRESH_CRON` are set (and `FRONTEND_URL` + `SYNC_SECRET` are present), the
+backend registers the cron jobs `integration_sync` and `integration_refresh`, which POST the
+frontend's bearer-protected integration endpoints on that schedule. A misconfigured job (cron set
+but URL/secret missing, or a syntactically invalid cron expression) logs an error and is not
+scheduled without affecting the sibling job; `DRY_MODE` skips the outbound call.
+Superusers can inspect and manually fire the jobs in the admin UI (Settings → Crons) or via
+`GET /api/crons` / `POST /api/crons/{id}` — the tests use the latter. Operational details live in
+the frontend repo: `docs/operations/integration-sync.md`.
 
 ## Keeping this file in sync
 

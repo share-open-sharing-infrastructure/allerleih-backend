@@ -99,6 +99,58 @@ test('a member can leave (delete their own membership) but cannot remove another
 	assert.equal((await api('GET', `/api/collections/items/records/${itemId}`, alice.t)).status, 404, 'alice lost access')
 })
 
+test("removing a member un-shares that member's own items from the group", async () => {
+	const g = await api('POST', '/api/collections/groups/records', owner.t, { name: 'UnshareOnRemove', owner: owner.id })
+	const aliceM = await api('POST', '/api/collections/group_members/records', owner.t, { group: g.json.id, user: alice.id })
+	assert.equal(aliceM.status, 200)
+
+	// alice shares HER OWN item with the group she just joined
+	const item = await api('POST', '/api/collections/items/records', alice.t, {
+		name: 'Alices Bohrer',
+		description: 'Akku',
+		place: 'Keller',
+		owner: alice.id,
+		trusteesOnly: true,
+		groups: [g.json.id],
+		status: 'available',
+	})
+	assert.equal(item.status, 200, 'a member can share their own item with the group')
+	assert.deepEqual(item.json.groups, [g.json.id])
+
+	// owner removes alice -> her item must be un-shared from the group
+	const del = await api('DELETE', `/api/collections/group_members/records/${aliceM.json.id}`, owner.t)
+	assert.ok([200, 204].includes(del.status), 'owner can remove the member')
+
+	const after = await api('GET', `/api/collections/items/records/${item.json.id}`, alice.t)
+	assert.equal(after.status, 200, 'alice still owns her item')
+	assert.deepEqual(after.json.groups, [], 'the group is removed from the item')
+})
+
+test('leaving un-shares the leaver items; a sole-group public item is made private, not left public', async () => {
+	const g = await api('POST', '/api/collections/groups/records', owner.t, { name: 'UnshareOnLeave', owner: owner.id })
+	const aliceM = await api('POST', '/api/collections/group_members/records', owner.t, { group: g.json.id, user: alice.id })
+
+	// a NON-trustees item shared ONLY with the group would become public if merely un-shared
+	const item = await api('POST', '/api/collections/items/records', alice.t, {
+		name: 'NurGruppe',
+		description: 'x',
+		place: 'y',
+		owner: alice.id,
+		trusteesOnly: false,
+		groups: [g.json.id],
+		status: 'available',
+	})
+	assert.equal(item.status, 200)
+
+	// alice leaves (deletes her own membership)
+	const leave = await api('DELETE', `/api/collections/group_members/records/${aliceM.json.id}`, alice.t)
+	assert.ok([200, 204].includes(leave.status), 'a member can leave')
+
+	const after = await api('GET', `/api/collections/items/records/${item.json.id}`, alice.t)
+	assert.deepEqual(after.json.groups, [], 'the group is removed from the item')
+	assert.equal(after.json.trusteesOnly, true, 'the now-group-less item is flipped to trustees-only, not left public')
+})
+
 test('every member sees the full roster, and the owner is an admin member', async () => {
 	const { groupId } = await groupWithItem('MemberList')
 	await api('POST', '/api/collections/group_members/records', owner.t, { group: groupId, user: alice.id })
