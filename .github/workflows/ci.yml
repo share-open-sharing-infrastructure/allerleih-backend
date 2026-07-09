@@ -121,7 +121,7 @@ jobs:
           [program:pocketbase]
           directory=%(ENV_HOME)s/pocketbase
           command=pocketbase serve --http :8090
-          environment=ORS_API_KEY="${{ secrets.ORS_API_KEY }}",FRONTEND_URL="${{ vars.FRONTEND_URL }}",SYNC_SECRET="${{ secrets.SYNC_SECRET }}",SYNC_CRON="${{ vars.SYNC_CRON }}",REFRESH_CRON="${{ vars.REFRESH_CRON }}"
+          environment=ORS_API_KEY="${{ secrets.ORS_API_KEY }}",FRONTEND_URL="${{ vars.FRONTEND_URL }}",SYNC_SECRET="${{ secrets.SYNC_SECRET }}",SYNC_CRON="${{ vars.SYNC_CRON }}",REFRESH_CRON="${{ vars.REFRESH_CRON }}",SMTP_HOST="${{ secrets.SMTP_HOST }}",SMTP_PORT="${{ secrets.SMTP_PORT }}",SMTP_USERNAME="${{ secrets.SMTP_USERNAME }}",SMTP_PASSWORD="${{ secrets.SMTP_PASSWORD }}",SMTP_TLS="${{ secrets.SMTP_TLS }}",SENDER_ADDRESS="${{ secrets.SENDER_ADDRESS }}",APP_URL="${{ secrets.APP_URL }}"
           autostart=yes
           autorestart=yes
           startsecs=60
