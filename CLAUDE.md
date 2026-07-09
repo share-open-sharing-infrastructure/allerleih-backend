@@ -32,6 +32,7 @@ npm test                                 # node --test, runs tests/*.test.mjs se
 ```
 pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── main.pb.js               # bootstrap / startup logging
+├── mail_config.pb.js        # bootstrap: configures SMTP from env when SMTP_HOST is set (#8); unset = no-op
 ├── constants.js             # ALL env vars + config in one place (see below)
 ├── group.pb.js              # group lifecycle hooks + /api/group-invite/* routes
 ├── invite.pb.js             # GET /api/invite/{code} — public invite-code lookup
@@ -240,6 +241,9 @@ All env/config is centralized here; most have safe defaults:
 | `ADMIN_NOTIFY_EMAIL` | `ADMIN_NOTIFY_EMAIL` | — | Admin recipient for the "inactive account skipped (open loan)" notice |
 | `RETENTION_SKIP_NOTICE_COOLDOWN_DAYS` | `RETENTION_SKIP_NOTICE_COOLDOWN_DAYS` | `7` | Min days between repeat skip notices for the same account |
 | `RETENTION_PAGE_SIZE` | `RETENTION_PAGE_SIZE` | `200` | Records per keyset-paginated batch in the retention jobs (tests set it low) |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | `SMTP_*` | — / `587` / — / — | SMTP server applied on bootstrap by `mail_config.pb.js` **only when `SMTP_HOST` is set** (idempotent). Empty `SMTP_HOST` = no-op: existing admin-UI settings are left untouched (never disabled/cleared) |
+| `SMTP_TLS` / `SMTP_AUTH_METHOD` / `SMTP_LOCAL_NAME` | `SMTP_*` | `false` / `PLAIN` / — | `SMTP_TLS=true` = implicit TLS (465); `false` = STARTTLS (587) |
+| `SENDER_ADDRESS` / `SENDER_NAME` / `APP_URL` | same | — | Optional overrides of the `meta` mail settings; only applied when set |
 
 Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
 geocoding, and email don't work for real.
