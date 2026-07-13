@@ -6,13 +6,14 @@ import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { startPB, stopPB, makeUser, api } from './harness.mjs'
 
-let pb, owner, member, outsider
+let pb, owner, member, outsider, trustedUser
 
 before(async () => {
 	pb = await startPB()
 	owner = await makeUser('cowner')
 	member = await makeUser('cmember')
 	outsider = await makeUser('coutsider')
+	trustedUser = await makeUser('ctrusted')
 })
 
 after(() => stopPB(pb))
@@ -35,6 +36,47 @@ async function groupItem(groupId) {
 	assert.equal(it.status, 200)
 	return it.json.id
 }
+
+async function trusteesOnlyItem() {
+	const it = await api('POST', '/api/collections/items/records', owner.t, {
+		name: 'TrustBorrowable',
+		description: 'd',
+		place: 'p',
+		owner: owner.id,
+		trusteesOnly: true, // TRUSTEES-ONLY (not public, not group)
+		status: 'available',
+	})
+	assert.equal(it.status, 200)
+	return it.json.id
+}
+
+// Exercises the trust clause of the conversations createRule specifically — the
+// deepest migrated back-relation traversal (requestedItem -> owner ->
+// trusts_via_truster -> trustee), which only fails at runtime.
+test('createRule: a trusted user can request a trustees-only item, a non-trusted user cannot', async () => {
+	// owner trusts trustedUser: a trusts edge {truster: owner, trustee: trustedUser}
+	const edge = await api('POST', '/api/collections/trusts/records', owner.t, {
+		truster: owner.id,
+		trustee: trustedUser.id,
+	})
+	assert.equal(edge.status, 200)
+
+	const itemId = await trusteesOnlyItem()
+
+	const ok = await api('POST', '/api/collections/conversations/records', trustedUser.t, {
+		requester: trustedUser.id,
+		itemOwner: owner.id,
+		requestedItem: itemId,
+	})
+	assert.equal(ok.status, 200, 'trusted user can start a conversation for a trustees-only item')
+
+	const bad = await api('POST', '/api/collections/conversations/records', outsider.t, {
+		requester: outsider.id,
+		itemOwner: owner.id,
+		requestedItem: itemId,
+	})
+	assert.notEqual(bad.status, 200, 'non-trusted user cannot request a trustees-only item')
+})
 
 test('createRule: a group member can request a group item, a non-member cannot', async () => {
 	const g = await groupWithMember('ReqGroup', member.id)

@@ -35,6 +35,7 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── mail_config.pb.js        # bootstrap: configures SMTP from env when SMTP_HOST is set (#8); unset = no-op
 ├── constants.js             # ALL env vars + config in one place (see below)
 ├── group.pb.js              # group lifecycle hooks + /api/group-invite/* routes
+├── trust.pb.js              # `trusts` join guard (rejects self-trust edges)
 ├── invite.pb.js             # GET /api/invite/{code} — public invite-code lookup
 ├── contact.pb.js            # GET /api/contact/{userId} — visibility-gated contact handles
 ├── travel.pb.js             # POST /api/travel-times — ORS travel-time matrix
@@ -187,7 +188,10 @@ serialized. The open-loan skip notice is deduped via `retentionNotifiedAt` (cool
 Collection rules use `@request.auth`:
 - `@request.auth.id != ""` — require any authenticated user
 - `@request.auth.id = owner` — only the record's owner
-- `owner.trusts.id ?= @request.auth.id` — `?=` is "any-match"; traverses a multi-relation
+- `owner.trusts_via_truster.trustee.id ?= @request.auth.id` — the item's owner trusts the current
+  user (traversal through the `trusts` join collection: rows where `truster = owner`, `?=` is
+  "any-match"). Trust is a first-class join (`trusts`: `truster`, `trustee`), replacing the old
+  `users.trusts[]` multi-relation — same directional model as `group_members`.
 - `groups.group_members_via_group.user.id ?= @request.auth.id` — current user is a member of one of
   the item's groups (traversal through the `group_members` join table)
 - `groups:length = 0` — the multi-relation is empty (used to distinguish "public" from "group-only")
@@ -218,6 +222,12 @@ group but break on request (the owner is no longer a member) and the ex-member c
 group to un-share them. Same fail-safe + `trusteesOnly` flip as the group-delete fixup. It fires
 **only for explicit membership deletes**: group/user cascade deletes are DB-level and don't trigger
 hooks, so the whole-group teardown stays owned by the group-delete fixup.
+
+Note the same DB-level caveat for **`trusts` edges on account deletion**: the `trusts` relations
+`cascadeDelete`, but self-service deletion is *anonymize-in-place* (the `users` row is kept with
+`deleted=true`), so the cascade never fires. `anonymizeAccount` (`services/account.js`) therefore
+deletes the account's trust edges explicitly, in both directions
+(`deleteByFilter('trusts', 'truster = {:u} || trustee = {:u}')`).
 
 ## Configuration (`pb_hooks/constants.js`)
 

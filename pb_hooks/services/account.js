@@ -88,15 +88,10 @@ function anonymizeAccount(app, userRecord) {
             app.save(n)
         })
 
-    // 4. Remove the user from every OTHER user's trusts[] (the row survives, so
-    //    PocketBase does not auto-clean these references).
-    app.findRecordsByFilter('users', 'trusts.id ?= {:u}', '', 0, 0, { u: userId })
-        .filter((r) => !!r)
-        .forEach((u) => {
-            const next = (u.get('trusts') || []).filter((id) => id !== userId)
-            u.set('trusts', next)
-            app.save(u)
-        })
+    // 4. Remove every trust edge involving this user (in both directions). The
+    //    `trusts` relations cascadeDelete, but only on a hard user delete — this is
+    //    anonymize-in-place (the row survives), so we delete the edges explicitly.
+    deleteByFilter(app, 'trusts', 'truster = {:u} || trustee = {:u}', { u: userId })
 
     // 5. Nullify invitedBy on accounts this user invited (avoid "eingeladen von …").
     app.findRecordsByFilter('users', 'invitedBy = {:u}', '', 0, 0, { u: userId })
@@ -119,7 +114,6 @@ function anonymizeAccount(app, userRecord) {
     userRecord.set('contactEmail', '')
     userRecord.set('contactUrl', '')
     userRecord.set('contactPublic', false)
-    userRecord.set('trusts', [])
     userRecord.set('invitedBy', '')
     userRecord.set('inviteCode', '')
     userRecord.set('profileImage', '') // clears the uploaded file
@@ -175,12 +169,15 @@ function buildExport(app, userRecord) {
         )
     } catch (_) {}
 
-    // Trust graph: whom the user trusts, and who trusts the user.
-    const trusts = userRecord.get('trusts') || []
-    const trustedBy = app
-        .findRecordsByFilter('users', 'trusts.id ?= {:u}', '', 0, 0, { u: userId })
+    // Trust graph: whom the user trusts, and who trusts the user (from the join).
+    const trusts = app
+        .findRecordsByFilter('trusts', 'truster = {:u}', '', 0, 0, { u: userId })
         .filter((r) => !!r)
-        .map((r) => r.id)
+        .map((r) => r.get('trustee'))
+    const trustedBy = app
+        .findRecordsByFilter('trusts', 'trustee = {:u}', '', 0, 0, { u: userId })
+        .filter((r) => !!r)
+        .map((r) => r.get('truster'))
 
     return {
         exportedAt: now(),

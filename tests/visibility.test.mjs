@@ -41,15 +41,25 @@ async function createItem(extra) {
 	assert.equal(it.status, 200)
 	return it.json.id
 }
+// truster trusts trustee -> create a `trusts` join row (the truster owns the edge).
+async function trust(trusterUser, trusteeId) {
+	const r = await api('POST', '/api/collections/trusts/records', trusterUser.t, {
+		truster: trusterUser.id,
+		trustee: trusteeId,
+	})
+	assert.equal(r.status, 200)
+	return r.json.id
+}
+async function untrust(trusterUser, trustId) {
+	const r = await api('DELETE', `/api/collections/trusts/records/${trustId}`, trusterUser.t)
+	assert.ok([200, 204].includes(r.status))
+}
 
 test('group access and trust access grant visibility independently (the union)', async () => {
 	const g = await createGroup('Union')
 	await addMember(g, groupMember.id)
 	// owner trusts trustedUser (who is NOT a group member)
-	const upd = await api('PATCH', `/api/collections/users/records/${owner.id}`, owner.t, {
-		trusts: [trustedUser.id],
-	})
-	assert.equal(upd.status, 200)
+	const trustId = await trust(owner, trustedUser.id)
 
 	const itemId = await createItem({ trusteesOnly: true, groups: [g] })
 
@@ -58,7 +68,7 @@ test('group access and trust access grant visibility independently (the union)',
 	assert.equal((await get(itemId, outsider.t)).status, 404, 'neither -> blocked')
 
 	// reset trust so it can't leak into other tests in this file
-	await api('PATCH', `/api/collections/users/records/${owner.id}`, owner.t, { trusts: [] })
+	await untrust(owner, trustId)
 })
 
 test('a non-trustees item is public (visible to anyone logged in), groups irrelevant', async () => {
@@ -83,7 +93,7 @@ test('a GROUP-ONLY item (trusteesOnly=false + groups) excludes the trust list', 
 	const g = await createGroup('GroupOnly')
 	await addMember(g, groupMember.id)
 	// owner trusts trustedUser, who is NOT in the group
-	await api('PATCH', `/api/collections/users/records/${owner.id}`, owner.t, { trusts: [trustedUser.id] })
+	const trustId = await trust(owner, trustedUser.id)
 
 	// trusteesOnly is OFF, but the item is shared with a group -> NOT public,
 	// and the trust list must NOT grant access (the whole point of the new model).
@@ -94,7 +104,7 @@ test('a GROUP-ONLY item (trusteesOnly=false + groups) excludes the trust list', 
 	assert.equal((await get(itemId, outsider.t)).status, 404, 'outsider does not')
 	assert.equal((await get(itemId, owner.t)).status, 200, 'owner sees it')
 
-	await api('PATCH', `/api/collections/users/records/${owner.id}`, owner.t, { trusts: [] })
+	await untrust(owner, trustId)
 })
 
 test('a group-only item is not public and is masked in items_public', async () => {
@@ -115,7 +125,7 @@ test('a group-only item is not public and is masked in items_public', async () =
 test('a TRUSTEES-ONLY item (no groups) is hidden from non-trusted group members', async () => {
 	const g = await createGroup('TrustOnly')
 	await addMember(g, groupMember.id) // group member, but owner does NOT trust them
-	await api('PATCH', `/api/collections/users/records/${owner.id}`, owner.t, { trusts: [trustedUser.id] })
+	const trustId = await trust(owner, trustedUser.id)
 
 	const itemId = await createItem({ trusteesOnly: true }) // no groups
 
@@ -123,7 +133,23 @@ test('a TRUSTEES-ONLY item (no groups) is hidden from non-trusted group members'
 	assert.equal((await get(itemId, groupMember.t)).status, 404, 'unrelated group member does not')
 	assert.equal((await get(itemId, outsider.t)).status, 404, 'outsider does not')
 
-	await api('PATCH', `/api/collections/users/records/${owner.id}`, owner.t, { trusts: [] })
+	await untrust(owner, trustId)
+})
+
+// Guards the items_searchable view rule specifically (search/profile/sitemap read
+// this view, not base items). Its trust clause traverses the join back-relation
+// `userId.trusts_via_truster.trustee` — a view-context back-relation that can only
+// be validated at runtime.
+test('items_searchable honours the trust join (trusted sees a trustees-only item, others do not)', async () => {
+	const trustId = await trust(owner, trustedUser.id)
+	const itemId = await createItem({ trusteesOnly: true }) // no groups
+	const search = (id, tok) => api('GET', `/api/collections/items_searchable/records/${id}`, tok)
+
+	assert.equal((await search(itemId, trustedUser.t)).status, 200, 'trusted user sees it in items_searchable')
+	assert.equal((await search(itemId, outsider.t)).status, 404, 'non-trusted does not')
+	assert.equal((await search(itemId, owner.t)).status, 200, 'owner sees it')
+
+	await untrust(owner, trustId)
 })
 
 test('deleting a group-only item\'s last group makes it PRIVATE, never public', async () => {
