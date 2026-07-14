@@ -42,6 +42,9 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── legal.pb.js              # platform legal consent (#399): /api/legal/accept|decline (superuser,
 │                            #   server-authoritative), users-create consent stamping, locked-user guard
 ├── notification.pb.js       # messages → in-app notification + throttled email
+├── notification_guard.pb.js # onRecordCreateRequest guard: a user-created notification must be
+│                            #   authored by the caller and match a real event (conversation
+│                            #   participants / existing trust edge); superuser/$app creates skip it
 ├── integration_sync.pb.js   # cron jobs POSTing the frontend's /api/sync + /api/refresh (see below)
 ├── services/                # shared business logic: group.js, notification.js, mail.js
 ├── utils/                   # common.js (nowIso, formatDateTime, uniqueBy), db.js
