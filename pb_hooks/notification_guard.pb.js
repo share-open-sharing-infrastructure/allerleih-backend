@@ -38,11 +38,16 @@ onRecordCreateRequest((e) => {
     ]
     const TRUST_TYPES = ['trust_added', 'invite_accepted']
 
-    // Only regular authenticated users can inject via the API. Superusers and
-    // programmatic ($app.save) creates are trusted and skip the guard.
-    if (!e.auth || e.auth.isSuperuser()) {
+    // Superusers and programmatic ($app.save) creates are trusted and skip the
+    // guard. An unauthenticated caller must never reach the notifications
+    // collection (the createRule also requires auth) — reject defensively so the
+    // guard can never be bypassed by the no-auth path.
+    if (e.auth && e.auth.isSuperuser()) {
         e.next()
         return
+    }
+    if (!e.auth) {
+        throw new BadRequestError('authentication required')
     }
 
     const n = e.record

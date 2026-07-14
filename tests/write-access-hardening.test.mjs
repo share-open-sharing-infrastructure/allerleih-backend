@@ -70,6 +70,45 @@ test('a participant cannot spoof the sender inside their own conversation', asyn
 	assert.notEqual(res.status, 200, 'from must be the caller')
 })
 
+test('a message cannot be rewritten after creation (no PATCH forgery)', async () => {
+	const created = await api('POST', '/api/collections/messages/records', requester.t, {
+		from: requester.id,
+		to: owner.id,
+		conversation: convId,
+		messageContent: 'original',
+	})
+	assert.equal(created.status, 200, JSON.stringify(created.json))
+	const id = created.json.id
+
+	// The author must not be able to rewrite from/content...
+	const byAuthor = await api('PATCH', `/api/collections/messages/records/${id}`, requester.t, {
+		from: owner.id,
+		messageContent: 'forged',
+	})
+	assert.notEqual(byAuthor.status, 200, 'author must not rewrite a message')
+
+	// ...nor the recipient.
+	const byRecipient = await api('PATCH', `/api/collections/messages/records/${id}`, owner.t, {
+		from: attacker.id,
+		messageContent: 'tampered',
+	})
+	assert.notEqual(byRecipient.status, 200, 'recipient must not rewrite a message')
+})
+
+test('a message cannot be deleted by a user', async () => {
+	const created = await api('POST', '/api/collections/messages/records', requester.t, {
+		from: requester.id,
+		to: owner.id,
+		conversation: convId,
+		messageContent: 'x',
+	})
+	assert.equal(created.status, 200, JSON.stringify(created.json))
+
+	const del = await api('DELETE', `/api/collections/messages/records/${created.json.id}`, requester.t)
+	assert.notEqual(del.status, 200)
+	assert.notEqual(del.status, 204)
+})
+
 test('feedback: anyone can submit, but only superusers can list', async () => {
 	const create = await api('POST', '/api/collections/feedback/records', null, { feedbackMessage: 'hi' })
 	assert.equal(create.status, 200, JSON.stringify(create.json))

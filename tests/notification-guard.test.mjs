@@ -74,6 +74,46 @@ test('the truster can create a trust notification for the trustee', async () => 
 	assert.equal(res.status, 200, JSON.stringify(res.json))
 })
 
+test('invite_accepted is accepted when the trust edge exists (direction-sensitive)', async () => {
+	// invite_accepted: sender = new user (truster), recipient = inviter (trustee).
+	// The requester->attacker edge created in before() matches truster=sender.
+	const res = await notif(requester.t, {
+		sender: requester.id,
+		recipient: attacker.id,
+		type: 'invite_accepted',
+		relatedId: requester.id,
+		body: 'x',
+	})
+	assert.equal(res.status, 200, JSON.stringify(res.json))
+})
+
+test('a lending-lifecycle notification from a participant is accepted', async () => {
+	const res = await notif(owner.t, {
+		sender: owner.id,
+		recipient: requester.id,
+		type: 'request_accepted',
+		relatedId: convId,
+		body: 'x',
+	})
+	assert.equal(res.status, 200, JSON.stringify(res.json))
+})
+
+test('an unauthenticated caller cannot create a notification', async () => {
+	// The original bypass: no auth + empty optional fields satisfied the old
+	// createRule via "" = relatedId, and the guard skipped no-auth callers.
+	const empty = await notif(null, { recipient: owner.id, type: 'new_message', relatedId: '', body: 'phish' })
+	assert.notEqual(empty.status, 200)
+
+	const spoofed = await notif(null, {
+		recipient: owner.id,
+		sender: requester.id,
+		type: 'new_message',
+		relatedId: convId,
+		body: 'phish',
+	})
+	assert.notEqual(spoofed.status, 200)
+})
+
 test('a conversation notification with a bogus relatedId is rejected', async () => {
 	const res = await notif(attacker.t, {
 		sender: attacker.id,
