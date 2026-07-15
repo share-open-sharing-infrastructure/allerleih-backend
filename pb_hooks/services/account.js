@@ -56,6 +56,7 @@ function anonymizeAccount(app, userRecord) {
     // 2. Hard-delete personal-only data (no retention need).
     deleteByFilter(app, 'user_contacts', 'user = {:u}', { u: userId })
     deleteByFilter(app, 'user_geolocations', 'user = {:u}', { u: userId })
+    deleteByFilter(app, 'user_preferences', 'user = {:u}', { u: userId })
     deleteByFilter(app, 'push_subscriptions', 'user = {:u}', { u: userId })
     // The user's own notification inbox.
     deleteByFilter(app, 'notifications', 'recipient = {:u}', { u: userId })
@@ -117,7 +118,6 @@ function anonymizeAccount(app, userRecord) {
     userRecord.set('invitedBy', '')
     userRecord.set('inviteCode', '')
     userRecord.set('profileImage', '') // clears the uploaded file
-    userRecord.set('hasOnboarded', false)
     userRecord.set('deleted', true)
     userRecord.set('deletedAt', now())
     userRecord.setRandomPassword() // invalidate the old credentials
@@ -168,6 +168,14 @@ function buildExport(app, userRecord) {
             app.findFirstRecordByFilter('user_geolocations', 'user = {:u}', { u: userId })
         )
     } catch (_) {}
+    // Preferences (emailNotifications, preferredTransportMode, hasOnboarded) live in the
+    // user_preferences sidecar (issue #426), not on the users row.
+    let preferences = null
+    try {
+        preferences = structuredRecord(
+            app.findFirstRecordByFilter('user_preferences', 'user = {:u}', { u: userId })
+        )
+    } catch (_) {}
 
     // Trust graph: whom the user trusts, and who trusts the user (from the join).
     const trusts = app
@@ -196,11 +204,11 @@ function buildExport(app, userRecord) {
             inviteCode: userRecord.get('inviteCode'),
             invitedBy: userRecord.get('invitedBy'),
             profileImage: userRecord.get('profileImage'),
-            preferredTransportMode: userRecord.get('preferredTransportMode'),
             created: userRecord.get('created'),
         },
         contact,
         geolocation,
+        preferences,
         items,
         conversations,
         messages,
