@@ -33,6 +33,8 @@ npm test                                 # node --test, runs tests/*.test.mjs se
 pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── main.pb.js               # bootstrap / startup logging
 ├── mail_config.pb.js        # bootstrap: configures SMTP from env when SMTP_HOST is set (#8); unset = no-op
+├── auth_mail_templates.pb.js # bootstrap: re-injects FRONTEND_URL as the host of the three `users`
+│                            #   auth-mail links every start (#447); no-op when FRONTEND_URL unset
 ├── constants.js             # ALL env vars + config in one place (see below)
 ├── group.pb.js              # group lifecycle hooks + /api/group-invite/* routes
 ├── trust.pb.js              # `trusts` join guard (rejects self-trust edges)
@@ -229,6 +231,30 @@ Note the same DB-level caveat for **`trusts` edges on account deletion**: the `t
 deletes the account's trust edges explicitly, in both directions
 (`deleteByFilter('trusts', 'truster = {:u} || trustee = {:u}')`).
 
+## Auth-mail templates (#447)
+
+Each auth collection has its own email templates (`verificationTemplate`, `confirmEmailChangeTemplate`,
+`resetPasswordTemplate`). They are configured **per collection**:
+
+- **`users`** (the German, member-facing templates) link to the **SvelteKit frontend** confirmation
+  pages: `/auth/confirm-verification?token={TOKEN}`, `/auth/confirm-email-change?token={TOKEN}`,
+  `/auth/reset/confirm?token={TOKEN}`. The host is the concrete `FRONTEND_URL`, with the `{APP_URL}`
+  placeholder as a documented fallback when `FRONTEND_URL` is unset.
+- **`_superusers`** (the admin templates) keep their PocketBase admin-UI links (`{APP_URL}/_/#/...`)
+  and are **never touched** — they must resolve against the backend admin UI.
+
+Two cooperating pieces keep the `users` host correct, because **`onBootstrap` hooks run *before*
+`pb_migrations` are applied** (an `onBootstrap` handler cannot see, or fix up, this migration's output
+on a fresh serve):
+
+1. `pb_migrations/<ts>_auth_mail_templates_frontend_urls.js` writes the three template bodies with the
+   frontend paths and resolves the host to `FRONTEND_URL` (falling back to `{APP_URL}`) — this makes
+   the **first** serve correct. Its `down` restores the pre-#447 snapshot values.
+2. `pb_hooks/auth_mail_templates.pb.js` (`onBootstrap`) re-injects `FRONTEND_URL` as the host on
+   **every subsequent** start, so a changed `FRONTEND_URL` is picked up on restart without a new
+   migration. Idempotent (saves only on change); a no-op when `FRONTEND_URL` is unset; never touches
+   `settings.meta.appURL` or the `_superusers` templates.
+
 ## Configuration (`pb_hooks/constants.js`)
 
 All env/config is centralized here; most have safe defaults:
@@ -253,7 +279,8 @@ All env/config is centralized here; most have safe defaults:
 | `RETENTION_PAGE_SIZE` | `RETENTION_PAGE_SIZE` | `200` | Records per keyset-paginated batch in the retention jobs (tests set it low) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | `SMTP_*` | — / `587` / — / — | SMTP server applied on bootstrap by `mail_config.pb.js` **only when `SMTP_HOST` is set** (idempotent). Empty `SMTP_HOST` = no-op: existing admin-UI settings are left untouched (never disabled/cleared) |
 | `SMTP_TLS` / `SMTP_AUTH_METHOD` / `SMTP_LOCAL_NAME` | `SMTP_*` | `false` / `PLAIN` / — | `SMTP_TLS=true` = implicit TLS (465); `false` = STARTTLS (587) |
-| `SENDER_ADDRESS` / `SENDER_NAME` / `APP_URL` | same | — | Optional overrides of the `meta` mail settings; only applied when set |
+| `SENDER_ADDRESS` / `SENDER_NAME` | same | — | Optional overrides of the `meta` mail settings; only applied when set |
+| `APP_URL` | `APP_URL` | `FRONTEND_URL` | Documented fallback host for the `{APP_URL}` placeholder in the `users` auth-mail templates (#447); defaults to `FRONTEND_URL`. **`mail_config.pb.js` only writes `settings.meta.appURL` from an *explicitly-set* `APP_URL` env**, never from this fallback — otherwise the `_superusers` admin-UI links would break |
 
 Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
 geocoding, and email don't work for real.
