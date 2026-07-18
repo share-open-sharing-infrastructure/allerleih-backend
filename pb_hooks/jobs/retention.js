@@ -18,13 +18,17 @@
 
 const { findBlockingLoans, anonymizeAccount } = require(`${__hooks}/services/account.js`)
 const { sendNotificationEmail } = require(`${__hooks}/services/mail.js`)
-const { now, daysAgoIso } = require(`${__hooks}/utils/common.js`)
+const { now, daysAgoIso, monthsAfterIso } = require(`${__hooks}/utils/common.js`)
 const {
     DRY_MODE,
     ADMIN_NOTIFY_EMAIL,
     RETENTION_SKIP_NOTICE_COOLDOWN_DAYS,
+    RETENTION_INACTIVE_MONTHS,
     RETENTION_PAGE_SIZE,
 } = require(`${__hooks}/constants.js`)
+
+const INACTIVE_MONTHS =
+    isNaN(RETENTION_INACTIVE_MONTHS) || RETENTION_INACTIVE_MONTHS < 1 ? 6 : RETENTION_INACTIVE_MONTHS
 
 const SKIP_NOTICE_COOLDOWN_DAYS =
     isNaN(RETENTION_SKIP_NOTICE_COOLDOWN_DAYS) || RETENTION_SKIP_NOTICE_COOLDOWN_DAYS < 0
@@ -160,6 +164,72 @@ function notifyInactiveSkipped(app, userRecord, loanCount) {
 }
 
 /**
+ * Job 5 — advance warning ahead of Job 1: email every account whose effective last
+ * activity (`lastLoginAt`, falling back to `created`) predates `warnCutoffIso` that it
+ * will be deleted on <last activity + RETENTION_INACTIVE_MONTHS months>, and that
+ * logging in prevents it. The cutoff is the deletion cutoff shifted forward by
+ * RETENTION_INACTIVE_WARN_DAYS (resolved in retention.pb.js).
+ *
+ * Sent at most once per inactivity cycle: `deletionWarnedAt` is stamped after a
+ * successful send, and a stamp older than the effective last activity belongs to a
+ * previous cycle — so a login (which re-stamps `lastLoginAt`) re-arms the warning
+ * with no auth-hook involvement. A send failure leaves the stamp unset, so the
+ * nightly run retries until the mail goes out. Open-loan accounts are warned too
+ * (the loan may close before the deadline; if not, Job 1 sends the skip notice).
+ * Runs independently of Job 1 — it never delays a deletion.
+ */
+function warnInactiveAccounts(app, warnCutoffIso) {
+    let warned = 0
+    let failed = 0
+
+    forEachMatching(
+        app,
+        'users',
+        'deleted != true && ' +
+            '((lastLoginAt != "" && lastLoginAt < {:c}) || (lastLoginAt = "" && created < {:c})) && ' +
+            '(deletionWarnedAt = "" || ' +
+            '(lastLoginAt != "" && deletionWarnedAt < lastLoginAt) || ' +
+            '(lastLoginAt = "" && deletionWarnedAt < created))',
+        { c: warnCutoffIso },
+        (user) => {
+            try {
+                const lastActive = user.getString('lastLoginAt') || user.getString('created')
+                const deletionDate = germanDate(monthsAfterIso(lastActive, INACTIVE_MONTHS))
+                if (!DRY_MODE) {
+                    const body = $template
+                        .loadFiles(`${__hooks}/views/mail/retention_warning_user.html`)
+                        .render({
+                            USERNAME: user.get('username'),
+                            DELETION_DATE: deletionDate,
+                            MONTHS: INACTIVE_MONTHS,
+                        })
+                    sendNotificationEmail(app, {
+                        to: user.email(),
+                        subject: `Dein AllerLeih-Konto wird am ${deletionDate} gelöscht`,
+                        body,
+                    })
+                }
+                // Stamped after the send (and under DRY_MODE, so the once-per-cycle
+                // gate stays testable) — a send failure above skips it and retries.
+                user.set('deletionWarnedAt', now())
+                app.save(user)
+                warned++
+            } catch (err) {
+                failed++
+                app.logger().error('[retention] inactivity warning failed', 'userId', user.id, 'error', String(err))
+            }
+        }
+    )
+
+    return { warned, failed }
+}
+
+/** "YYYY-MM-DD …" → "TT.MM.JJJJ" (the shared UTC timestamp format is positional). */
+function germanDate(iso) {
+    return `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`
+}
+
+/**
  * Job 2 — delete conversations whose last activity (`updated`) predates `cutoffIso`,
  * together with their messages and any notifications pointing at them. Per the product
  * decision this ignores `lendingStatus` (no open-loan guard). Each conversation is
@@ -223,6 +293,7 @@ function purgeOldFeedback(app, cutoffIso) {
 
 module.exports = {
     purgeInactiveAccounts,
+    warnInactiveAccounts,
     purgeOldConversations,
     purgeOldNotifications,
     purgeOldFeedback,

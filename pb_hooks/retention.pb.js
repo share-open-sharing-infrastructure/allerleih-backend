@@ -6,6 +6,8 @@
 //   02:10  conversations      → delete RETENTION_MESSAGES_MONTHS after last activity (incl. messages)
 //   02:20  notifications      → delete after RETENTION_NOTIFICATIONS_DAYS
 //   02:30  feedback           → delete after RETENTION_FEEDBACK_MONTHS
+//   02:40  inactivity warning → email accounts RETENTION_INACTIVE_WARN_DAYS before the
+//          deletion threshold (once per inactivity cycle; logging in re-arms it)
 // Job logic lives in jobs/retention.js; each job is idempotent and logs only counts
 // (no personal data). A window of 0 disables the corresponding job.
 
@@ -91,6 +93,37 @@ cronAdd('retentionFeedback', '30 2 * * *', () => {
     }
 })
 
+cronAdd('retentionInactiveWarnings', '40 2 * * *', () => {
+    const { RETENTION_INACTIVE_MONTHS, RETENTION_INACTIVE_WARN_DAYS } = require(`${__hooks}/constants.js`)
+    const { retentionCutoff, shiftDaysIso, now } = require(`${__hooks}/utils/common.js`)
+    if (RETENTION_INACTIVE_WARN_DAYS === 0) return
+    if (isNaN(RETENTION_INACTIVE_WARN_DAYS) || RETENTION_INACTIVE_WARN_DAYS < 0) {
+        $app.logger().error('[retention] inactivity warning: invalid RETENTION_INACTIVE_WARN_DAYS — refusing to run', 'value', String(RETENTION_INACTIVE_WARN_DAYS))
+        return
+    }
+    const win = retentionCutoff(RETENTION_INACTIVE_MONTHS, 'months')
+    if (win.disabled) return // deletion disabled → nothing to warn about
+    if (win.invalid) {
+        $app.logger().error('[retention] inactivity warning: invalid RETENTION_INACTIVE_MONTHS — refusing to run', 'value', String(RETENTION_INACTIVE_MONTHS))
+        return
+    }
+    // Warn RETENTION_INACTIVE_WARN_DAYS before the deletion cutoff. A lead time that
+    // exceeds the inactive window would put the cutoff in the future and mail every
+    // active user — that is a misconfiguration, not a schedule; refuse to run.
+    const cutoff = shiftDaysIso(win.cutoff, RETENTION_INACTIVE_WARN_DAYS)
+    if (cutoff >= now()) {
+        $app.logger().error('[retention] inactivity warning: RETENTION_INACTIVE_WARN_DAYS exceeds the inactive window — refusing to run', 'value', String(RETENTION_INACTIVE_WARN_DAYS))
+        return
+    }
+    const { warnInactiveAccounts } = require(`${__hooks}/jobs/retention.js`)
+    try {
+        const res = warnInactiveAccounts($app, cutoff)
+        $app.logger().info('[retention] inactivity warnings done', 'warned', res.warned, 'failed', res.failed)
+    } catch (err) {
+        $app.logger().error('[retention] inactivity warnings failed', 'error', String(err))
+    }
+})
+
 // Test-only escape hatch: lets the integration tests trigger a job with an explicit
 // cutoff over HTTP (cron schedules can't be fired on demand). Registered ONLY when
 // RETENTION_TEST_ROUTE=true — the route does not exist in production.
@@ -102,6 +135,7 @@ if ($os.getenv('RETENTION_TEST_ROUTE') === 'true') {
             const jobs = require(`${__hooks}/jobs/retention.js`)
             const handlers = {
                 'inactive-accounts': jobs.purgeInactiveAccounts,
+                'inactive-warnings': jobs.warnInactiveAccounts,
                 conversations: jobs.purgeOldConversations,
                 notifications: jobs.purgeOldNotifications,
                 feedback: jobs.purgeOldFeedback,
