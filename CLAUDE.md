@@ -56,10 +56,12 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── views/                   # email HTML templates (layout.html + mail/)
 ├── jobs/                    # cron job bodies: integrationSync.js
 ├── routes/                  # placeholder — routes currently live in *.pb.js
-├── account.pb.js            # DELETE /api/account + export, deleted-login block, lastLoginAt stamp
+├── account.pb.js            # DELETE /api/account + export, deleted-login block, lastLoginAt stamp,
+│                            #   users email normalization (trim+lowercase) on create/update (#557)
 ├── retention.pb.js          # GDPR retention cron jobs (#461) + guarded test route
 ├── services/                # shared business logic: account.js, group.js, legal.js, notification.js, mail.js
-├── utils/                   # common.js (now, monthsAgoIso, daysAgoIso, formatDateTime, uniqueBy), db.js
+├── utils/                   # common.js (now, monthsAgoIso, daysAgoIso, formatDateTime, uniqueBy),
+│                            #   email.js (normalizeEmail + planEmailNormalization, #557), db.js
 ├── views/                   # email HTML templates (layout.html + mail/)
 ├── jobs/                    # retention.js — GDPR purge job logic (called from retention.pb.js)
 ├── routes/                  # placeholder — routes live in *.pb.js
