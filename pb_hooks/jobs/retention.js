@@ -18,7 +18,7 @@
 
 const { findBlockingLoans, anonymizeAccount } = require(`${__hooks}/services/account.js`)
 const { sendNotificationEmail } = require(`${__hooks}/services/mail.js`)
-const { now, daysAgoIso, monthsAfterIso } = require(`${__hooks}/utils/common.js`)
+const { now, daysAgoIso, shiftDaysIso, monthsAfterIso } = require(`${__hooks}/utils/common.js`)
 const {
     DRY_MODE,
     ADMIN_NOTIFY_EMAIL,
@@ -173,10 +173,12 @@ function notifyInactiveSkipped(app, userRecord, loanCount) {
  * Sent at most once per inactivity cycle: `deletionWarnedAt` is stamped after a
  * successful send, and a stamp older than the effective last activity belongs to a
  * previous cycle — so a login (which re-stamps `lastLoginAt`) re-arms the warning
- * with no auth-hook involvement. A send failure leaves the stamp unset, so the
- * nightly run retries until the mail goes out. Open-loan accounts are warned too
- * (the loan may close before the deadline; if not, Job 1 sends the skip notice).
- * Runs independently of Job 1 — it never delays a deletion.
+ * with no auth-hook involvement. A send failure (or DRY_MODE, which never sends)
+ * leaves the stamp unset, so the nightly run retries until the mail actually goes
+ * out — a DRY_MODE preview run must never silently consume the once-per-cycle gate.
+ * Open-loan accounts are warned too (the loan may close before the deadline; if not,
+ * Job 1 sends the skip notice). Runs independently of Job 1 — it never delays a
+ * deletion.
  */
 function warnInactiveAccounts(app, warnCutoffIso) {
     let warned = 0
@@ -194,7 +196,11 @@ function warnInactiveAccounts(app, warnCutoffIso) {
         (user) => {
             try {
                 const lastActive = user.getString('lastLoginAt') || user.getString('created')
-                const deletionDate = germanDate(monthsAfterIso(lastActive, INACTIVE_MONTHS))
+                const deletionIso = monthsAfterIso(lastActive, INACTIVE_MONTHS)
+                // Open-loan/failed rows can survive Job 1 past the threshold (it runs 40
+                // minutes before this job) — never state a past date; the earliest
+                // possible deletion at that point is the next nightly run.
+                const deletionDate = germanDate(deletionIso < now() ? shiftDaysIso(now(), 1) : deletionIso)
                 if (!DRY_MODE) {
                     const body = $template
                         .loadFiles(`${__hooks}/views/mail/retention_warning_user.html`)
@@ -202,17 +208,20 @@ function warnInactiveAccounts(app, warnCutoffIso) {
                             USERNAME: user.get('username'),
                             DELETION_DATE: deletionDate,
                             MONTHS: INACTIVE_MONTHS,
+                            APP_URL: app.settings().meta.appURL || '',
                         })
                     sendNotificationEmail(app, {
                         to: user.email(),
                         subject: `Dein AllerLeih-Konto wird am ${deletionDate} gelöscht`,
                         body,
                     })
+                    // Stamped only after a real send — under DRY_MODE nothing was actually
+                    // mailed, so consuming the once-per-cycle gate here would let a
+                    // preview run (DRY_MODE flipped on to check the rollout) silently
+                    // suppress the real warning for the rest of the inactivity cycle.
+                    user.set('deletionWarnedAt', now())
+                    app.save(user)
                 }
-                // Stamped after the send (and under DRY_MODE, so the once-per-cycle
-                // gate stays testable) — a send failure above skips it and retries.
-                user.set('deletionWarnedAt', now())
-                app.save(user)
                 warned++
             } catch (err) {
                 failed++
