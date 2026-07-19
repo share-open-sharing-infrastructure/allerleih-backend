@@ -20,8 +20,14 @@ onBootstrap((e) => {
 
     const {
         SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, SMTP_TLS,
-        SMTP_AUTH_METHOD, SMTP_LOCAL_NAME, SENDER_ADDRESS, SENDER_NAME, APP_URL,
+        SMTP_AUTH_METHOD, SMTP_LOCAL_NAME, SENDER_ADDRESS, SENDER_NAME,
     } = require(`${__hooks}/constants.js`)
+
+    // appURL is only ever set from an EXPLICITLY-provided APP_URL env var — never from the
+    // FRONTEND_URL fallback that constants.APP_URL now carries (#447). Overwriting appURL with the
+    // frontend origin would break the `_superusers` admin links (they resolve `{APP_URL}` to the
+    // backend admin UI). Reading the raw env here keeps this hook's appURL behavior unchanged.
+    const APP_URL = $os.getenv('APP_URL') || ''
 
     // No SMTP_HOST → leave whatever is already configured (e.g. via the admin UI) completely
     // untouched. The hook only ever adds/updates SMTP from the env; it never disables or clears,

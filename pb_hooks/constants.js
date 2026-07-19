@@ -99,7 +99,15 @@ const SMTP_AUTH_METHOD = $os.getenv('SMTP_AUTH_METHOD') || 'PLAIN'
 const SMTP_LOCAL_NAME = $os.getenv('SMTP_LOCAL_NAME') || ''
 const SENDER_ADDRESS = $os.getenv('SENDER_ADDRESS') || ''
 const SENDER_NAME = $os.getenv('SENDER_NAME') || ''
-const APP_URL = $os.getenv('APP_URL') || ''
+/**
+ * Application URL used as the documented fallback host for the `{APP_URL}` placeholder in the
+ * `users` auth-mail templates (#447). Defaults to FRONTEND_URL so that — when no explicit APP_URL
+ * is set — those user-facing links still point at the SvelteKit frontend rather than the backend.
+ * NOTE: `mail_config.pb.js` only writes `settings.meta.appURL` from an EXPLICITLY-set APP_URL env
+ * var, never from this FRONTEND_URL fallback — otherwise the `_superusers` admin links (which rely
+ * on appURL pointing at the backend admin UI) would break (see #447 decision).
+ */
+const APP_URL = $os.getenv('APP_URL') || FRONTEND_URL
 
 module.exports = {
     LOG_LEVEL,
