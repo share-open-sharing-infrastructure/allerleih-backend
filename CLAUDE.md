@@ -177,6 +177,12 @@ thing (SvelteKit) — these are PocketBase routes:
 
 ## Scheduled jobs (`retention.pb.js` + `jobs/retention.js`)
 
+The open-loan guard (`BLOCKING_LOAN_FILTER` in `services/account.js`) is a **deliberate mirror**
+of `ACTIVE_LENDING_STATES` from the frontend's `src/lib/lending.ts` (share-mvp) — `accepted` /
+`active` / `return_requested`, intentionally **without** `pending` (a mere request must not block
+deletion). Separate repos, no shared package: a lending-status change on the frontend
+(`$lib/lending.ts`) **must** be carried over to this filter (and its comment) in the same effort.
+
 GDPR data-retention (#461, DSE v2.8): four nightly `cronAdd` jobs — inactive accounts (02:00,
 anonymize via `anonymizeAccount`; accounts with an open loan are skipped and user + admin get a
 mail), conversations incl. messages + related notifications (02:10), notifications (02:20),
