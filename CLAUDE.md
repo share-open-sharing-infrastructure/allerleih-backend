@@ -44,6 +44,9 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── legal.pb.js              # platform legal consent (#399): /api/legal/accept|decline (superuser,
 │                            #   server-authoritative), users-create consent stamping, locked-user guard
 ├── notification.pb.js       # messages → in-app notification + throttled email
+├── notification_guard.pb.js # onRecordCreateRequest guard: a user-created notification must be
+│                            #   authored by the caller and match a real event (conversation
+│                            #   participants / existing trust edge); superuser/$app creates skip it
 ├── lending.pb.js            # #373 conversations onRecordUpdateRequest guard: only a participant may
 │                            #   abort (lendingStatus → 'aborted') from pending/accepted; on accepted →
 │                            #   aborted resets the requested item to 'available' atomically (elevated tx)
