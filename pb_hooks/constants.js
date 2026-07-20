@@ -65,6 +65,13 @@ const RETENTION_NOTIFICATIONS_DAYS = parseInt($os.getenv('RETENTION_NOTIFICATION
 const RETENTION_FEEDBACK_MONTHS = parseInt($os.getenv('RETENTION_FEEDBACK_MONTHS') || '6')
 
 /**
+ * How many days before the inactive-account deletion threshold the advance-warning
+ * email is sent (once per inactivity cycle; logging in re-arms it). 0 disables the
+ * warning job. Runs independently of the deletion job — it never delays a deletion.
+ */
+const RETENTION_INACTIVE_WARN_DAYS = parseInt($os.getenv('RETENTION_INACTIVE_WARN_DAYS') || '30')
+
+/**
  * Where to notify a platform admin when an inactive account is *skipped* because it
  * still has an open loan (the #461 edge case). Empty => admin mail is skipped (logged).
  */
@@ -126,6 +133,7 @@ module.exports = {
     RETENTION_MESSAGES_MONTHS,
     RETENTION_NOTIFICATIONS_DAYS,
     RETENTION_FEEDBACK_MONTHS,
+    RETENTION_INACTIVE_WARN_DAYS,
     ADMIN_NOTIFY_EMAIL,
     RETENTION_SKIP_NOTICE_COOLDOWN_DAYS,
     RETENTION_PAGE_SIZE,
