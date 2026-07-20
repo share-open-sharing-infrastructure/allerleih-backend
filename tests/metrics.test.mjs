@@ -1,0 +1,177 @@
+// Business-metrics project: conversations.acceptedAt/completedAt stamping
+// (lending_timestamps.pb.js) and the nightly metrics_daily snapshot
+// (metrics.pb.js / jobs/metrics.js). The cron itself can't be fired on demand, so
+// the harness starts PocketBase with METRICS_TEST_ROUTE=true and the tests trigger
+// it through the guarded POST /api/_test/run-metrics-snapshot route.
+import { test, before, after } from 'node:test'
+import assert from 'node:assert/strict'
+import { startPB, stopPB, makeUser, api, adminAuth } from './harness.mjs'
+
+let pb
+
+before(async () => {
+	pb = await startPB({ METRICS_TEST_ROUTE: 'true' })
+})
+
+after(() => stopPB(pb))
+
+const runSnapshot = () => api('POST', '/api/_test/run-metrics-snapshot', adminAuth())
+
+async function createItem(ownerToken, owner, overrides = {}) {
+	const r = await api('POST', '/api/collections/items/records', ownerToken, {
+		name: 'MetricsItem',
+		description: 'd',
+		place: 'p',
+		owner,
+		trusteesOnly: false,
+		status: 'available',
+		...overrides,
+	})
+	assert.equal(r.status, 200, JSON.stringify(r.json))
+	return r.json.id
+}
+
+async function createConversation(requesterToken, requester, itemOwner, requestedItem) {
+	const r = await api('POST', '/api/collections/conversations/records', requesterToken, {
+		requester,
+		itemOwner,
+		requestedItem,
+		lendingStatus: 'pending',
+	})
+	assert.equal(r.status, 200, JSON.stringify(r.json))
+	return r.json.id
+}
+
+const patchStatus = (convId, actorToken, lendingStatus, extra = {}) =>
+	api('PATCH', `/api/collections/conversations/records/${convId}`, actorToken, {
+		lendingStatus,
+		...extra,
+	})
+
+test('test route requires superuser', async () => {
+	const u = await makeUser('metricsauth')
+	const asUser = await api('POST', '/api/_test/run-metrics-snapshot', u.t)
+	assert.ok([401, 403].includes(asUser.status), 'regular user is rejected')
+})
+
+test('acceptedAt/completedAt: stamped once on first transition, then idempotent', async () => {
+	const owner = await makeUser('mtsowner1')
+	const requester = await makeUser('mtsreq1')
+	const item = await createItem(owner.t, owner.id)
+	const convId = await createConversation(requester.t, requester.id, owner.id, item)
+
+	const accepted = await patchStatus(convId, owner.t, 'accepted')
+	assert.equal(accepted.status, 200)
+	const firstAcceptedAt = accepted.json.acceptedAt
+	assert.ok(firstAcceptedAt, 'acceptedAt stamped on pending -> accepted')
+	assert.equal(accepted.json.completedAt, '', 'completedAt untouched by an accept')
+
+	// abort (frees the item) then re-accept — idempotent: acceptedAt must NOT move.
+	const aborted = await patchStatus(convId, owner.t, 'aborted')
+	assert.equal(aborted.status, 200)
+	const reaccepted = await patchStatus(convId, owner.t, 'accepted')
+	assert.equal(reaccepted.status, 200)
+	assert.equal(reaccepted.json.acceptedAt, firstAcceptedAt, 're-accept keeps the FIRST acceptedAt')
+
+	const completed = await patchStatus(convId, owner.t, 'completed')
+	assert.equal(completed.status, 200)
+	assert.ok(completed.json.completedAt, 'completedAt stamped on transition into completed')
+	assert.equal(completed.json.acceptedAt, firstAcceptedAt, 'acceptedAt still unchanged')
+})
+
+test('acceptedAt cannot be forged by a client-supplied value', async () => {
+	const owner = await makeUser('mtsowner2')
+	const requester = await makeUser('mtsreq2')
+	const item = await createItem(owner.t, owner.id)
+	const convId = await createConversation(requester.t, requester.id, owner.id, item)
+
+	// No real transition (still pending) — a forged acceptedAt must be discarded.
+	const forged = await api('PATCH', `/api/collections/conversations/records/${convId}`, owner.t, {
+		acceptedAt: '2000-01-01 00:00:00.000Z',
+	})
+	assert.equal(forged.status, 200)
+	assert.equal(forged.json.acceptedAt, '', 'forged acceptedAt without a real transition is discarded')
+
+	// Real transition WITH a forged value in the same request — hook wins, not the payload.
+	const acceptedWithForgery = await api(
+		'PATCH',
+		`/api/collections/conversations/records/${convId}`,
+		owner.t,
+		{ lendingStatus: 'accepted', acceptedAt: '2000-01-01 00:00:00.000Z' }
+	)
+	assert.equal(acceptedWithForgery.status, 200)
+	assert.notEqual(
+		acceptedWithForgery.json.acceptedAt,
+		'2000-01-01 00:00:00.000Z',
+		'the hook-computed timestamp overrides a forged one, not the other way round'
+	)
+})
+
+test('daily snapshot: computes core counts and upserts one row per day', async () => {
+	const owner = await makeUser('mtsowner3')
+	const requester = await makeUser('mtsreq3')
+	const item = await createItem(owner.t, owner.id)
+	const convId = await createConversation(requester.t, requester.id, owner.id, item)
+	await patchStatus(convId, owner.t, 'accepted')
+	await patchStatus(convId, owner.t, 'active')
+	await patchStatus(convId, owner.t, 'return_requested')
+	await patchStatus(convId, owner.t, 'completed')
+
+	const first = await runSnapshot()
+	assert.equal(first.status, 200)
+	assert.deepEqual(
+		first.json.groups.sort(),
+		[
+			'activeUsers',
+			'community',
+			'funnel',
+			'impact',
+			'integrations',
+			'items',
+			'loans',
+			'messages',
+			'outboundClicks',
+			'users',
+		].sort()
+	)
+
+	const rows1 = await api('GET', '/api/collections/metrics_daily/records?sort=-date&perPage=5', adminAuth())
+	assert.equal(rows1.status, 200)
+	assert.equal(rows1.json.items.length, 1, 'exactly one metrics_daily row exists')
+	const row1 = rows1.json.items[0]
+	assert.ok(row1.metrics.loans.byStatus.completed >= 1)
+	assert.ok(row1.metrics.loans.completedTotal >= 1)
+	assert.ok(row1.metrics.loans.accepted30d >= 1)
+	assert.ok(row1.metrics.loans.completed30d >= 1)
+	assert.ok(row1.metrics.items.available >= 1)
+	assert.ok(row1.metrics.users.total >= 2)
+
+	// Re-running the same day must upsert (same id), not create a second row.
+	const second = await runSnapshot()
+	assert.equal(second.status, 200)
+	const rows2 = await api('GET', '/api/collections/metrics_daily/records?sort=-date&perPage=5', adminAuth())
+	assert.equal(rows2.json.items.length, 1, 'still exactly one row after a second run')
+	assert.equal(rows2.json.items[0].id, row1.id, 'the SAME row was updated, not a new one created')
+})
+
+test('outbound clicks are attributed to the clicked item\'s owner, not left unattributed', async () => {
+	const owner = await makeUser('mtsowner4')
+	const clicker = await makeUser('mtsclicker4')
+	const item = await createItem(owner.t, owner.id)
+
+	const click = await api('POST', '/api/collections/outbound_clicks/records', clicker.t, {
+		destination: 'https://partner.example/x',
+		source_page: 'item-detail',
+		item,
+	})
+	assert.equal(click.status, 200, JSON.stringify(click.json))
+
+	const snapshot = await runSnapshot()
+	assert.equal(snapshot.status, 200)
+
+	const rows = await api('GET', '/api/collections/metrics_daily/records?sort=-date&perPage=1', adminAuth())
+	const byOwner = rows.json.items[0].metrics.outboundClicks.byItemOwner30d
+	const ownerEntry = byOwner.find((e) => e.userId === owner.id)
+	assert.ok(ownerEntry, 'the click is attributed to the item owner via the item relation')
+	assert.ok(ownerEntry.count >= 1)
+})
