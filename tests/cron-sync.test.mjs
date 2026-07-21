@@ -102,14 +102,21 @@ test('a triggered sync run POSTs /api/sync with the bearer secret', async () => 
 	assert.equal(stubRequests[0].authorization, `Bearer ${SECRET}`)
 })
 
-test('a triggered refresh run POSTs /api/refresh with the bearer secret', async () => {
+// As of #487 Phase 1 integration_refresh runs LOCALLY in the backend (pb_hooks/integrations/
+// refresh.js) — it no longer POSTs the frontend. It must therefore NOT hit the stub; instead it
+// logs a local run. (The per-institution refresh behaviour is covered end-to-end in
+// integration-refresh.test.mjs; here we only assert the cron no longer calls out to the frontend.)
+test('a triggered refresh run executes locally and does NOT POST the frontend', async () => {
 	stubResponse = OK_RESPONSE
-	await triggerJob('integration_refresh')
+	stubRequests.length = 0
 
-	assert.equal(stubRequests.length, 1)
-	assert.equal(stubRequests[0].method, 'POST')
-	assert.equal(stubRequests[0].url, '/api/refresh')
-	assert.equal(stubRequests[0].authorization, `Bearer ${SECRET}`)
+	const run = await api('POST', '/api/crons/integration_refresh', adminAuth())
+	assert.equal(run.status, 204)
+
+	// The local run logs a summary; no institutions are seeded in this suite, so it reports none.
+	await waitForLogs('no institutions configured')
+	// It must never have touched the frontend stub.
+	assert.equal(stubRequests.length, 0, 'integration_refresh must not POST the frontend anymore')
 })
 
 test('logs one line per institution summary, errors at error level', async () => {
