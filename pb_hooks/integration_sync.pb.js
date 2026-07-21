@@ -1,16 +1,19 @@
 /// <reference path="../pb_data/types.d.ts" />
 
 /**
- * Integration sync scheduling — registers cron jobs that POST the frontend's
- * bearer-protected /api/sync (full catalogue pull) and /api/refresh (per-item
- * refresh) endpoints. Schedules come from SYNC_CRON / REFRESH_CRON (standard
- * 5-field cron expressions); an empty/unset variable disables that job.
- * Job bodies live in jobs/integrationSync.js.
+ * Integration sync scheduling — registers the two cron jobs. Schedules come from SYNC_CRON /
+ * REFRESH_CRON (standard 5-field cron expressions); an empty/unset variable disables that job.
+ *
+ * - `integration_sync` (full catalogue pull): POSTs the frontend's bearer-protected /api/sync
+ *   (unchanged — needs FRONTEND_URL + SYNC_SECRET). Body in jobs/integrationSync.js.
+ * - `integration_refresh` (per-item refresh): as of #487 Phase 1 runs LOCALLY in the backend via
+ *   pb_hooks/integrations/refresh.js (native $app, per-institution transaction, $app.store()
+ *   overlap lock) — no HTTP call, so it needs only a valid REFRESH_CRON.
  *
  * This top-level code runs once at load time, so requiring constants.js here is
  * fine — but the cron callbacks execute later in an ISOLATED context: they see
  * no top-level variables at all (not even loop variables), only globals and
- * literals. Hence the two verbatim cronAdd blocks below.
+ * literals. Hence the verbatim cronAdd blocks below.
  */
 const { FRONTEND_URL, SYNC_SECRET, SYNC_CRON, REFRESH_CRON } = require(`${__hooks}/constants.js`)
 
@@ -55,9 +58,10 @@ function syncTargetConfigured(label, cronVarName) {
     return false
 }
 
-// The bearer secret travels as a header — over cross-host plain http it goes out
-// in cleartext. Loopback targets (local dev, same-host reverse proxy) are fine.
-if ((SYNC_CRON || REFRESH_CRON) && /^http:\/\//.test(FRONTEND_URL)) {
+// The bearer secret travels as a header — over cross-host plain http it goes out in cleartext.
+// Only the sync job POSTs the frontend now (refresh runs locally), so only SYNC_CRON matters here.
+// Loopback targets (local dev, same-host reverse proxy) are fine.
+if (SYNC_CRON && /^http:\/\//.test(FRONTEND_URL)) {
     const host = FRONTEND_URL.replace(/^http:\/\//, '').replace(/[:/].*$/, '')
     if (host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
         $app.logger().warn(
@@ -85,14 +89,12 @@ if (SYNC_CRON && syncTargetConfigured('sync', 'SYNC_CRON') && cronExpressionVali
     $app.logger().info('[cron:sync] scheduled /api/sync', 'cron', SYNC_CRON, 'target', FRONTEND_URL)
 }
 
-if (
-    REFRESH_CRON &&
-    syncTargetConfigured('refresh', 'REFRESH_CRON') &&
-    cronExpressionValid('refresh', 'REFRESH_CRON', REFRESH_CRON)
-) {
+// Refresh runs locally now — no FRONTEND_URL/SYNC_SECRET needed, only a valid expression.
+// Fail-soft is preserved: an invalid REFRESH_CRON logs and is not scheduled, leaving
+// integration_sync unaffected (and vice-versa).
+if (REFRESH_CRON && cronExpressionValid('refresh', 'REFRESH_CRON', REFRESH_CRON)) {
     cronAdd('integration_refresh', REFRESH_CRON, () => {
-        const { triggerIntegrationEndpoint } = require(`${__hooks}/jobs/integrationSync.js`)
-        triggerIntegrationEndpoint('refresh', '/api/refresh')
+        require(`${__hooks}/integrations/refresh.js`).runRefresh()
     })
-    $app.logger().info('[cron:refresh] scheduled /api/refresh', 'cron', REFRESH_CRON, 'target', FRONTEND_URL)
+    $app.logger().info('[cron:refresh] scheduled local per-item refresh', 'cron', REFRESH_CRON)
 }
