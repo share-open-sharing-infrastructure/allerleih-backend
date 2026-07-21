@@ -14,7 +14,7 @@ changing what a skill is *for*.
 ## 1. Scope
 
 Operate on every `SKILL.md` under `.claude/skills/*/` in **this** repo. If a skill explicitly
-references the frontend repo (`/home/domenik/Dokumente/allerleih`), verify those claims against it too;
+references the sibling `share-mvp` frontend repo (checked out next to this one), verify those claims against it too;
 otherwise leave other repos alone.
 
 ## 2. Extract the checkable claims
