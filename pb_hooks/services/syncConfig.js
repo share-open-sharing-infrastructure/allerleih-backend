@@ -4,9 +4,11 @@
  * sync_config service (#487 Phase 2 §3) — backfills the new `sync_config` collection from the
  * legacy `users.leihbackendUrl`/`leihbackendItemUrlTemplate` discovery fields.
  *
- * Callable with a migration `app` OR a hook `$app` (verified: a migration may `require()` a
- * pb_hooks module). Idempotent: safe to run from the data migration AND re-run via the guarded
- * test route. Logs COUNTS ONLY — never a URL, username, or other institution detail.
+ * ⚠️ HISTORICAL as of Phase 3: it is invoked ONLY by the one-time data migration
+ * `1784658387_backfill_sync_config.js`, which runs *before* the field-removal migration
+ * (`1784666446`) — so `users.leihbackendUrl` still exists at that point. It must NOT be called at
+ * runtime after startup (the source field is gone). Kept because the historical migration requires
+ * it. Idempotent; logs COUNTS ONLY — never a URL, username, or other institution detail.
  */
 
 /**
@@ -27,6 +29,7 @@ function backfillSyncConfigs(app) {
     // Lazy require (works in both migration and hook contexts); keeps the module's load-time
     // coupling minimal. Canonical source-type sniff — do not re-implement.
     const { isWinbiapUrl } = require(`${__hooks}/integrations/winbiap.js`)
+    const { errorMessage } = require(`${__hooks}/integrations/types.js`)
 
     const collection = app.findCollectionByNameOrId('sync_config')
     const counts = { scanned: 0, created: 0, skipped: 0, errors: 0 }
@@ -74,7 +77,7 @@ function backfillSyncConfigs(app) {
             } catch (err) {
                 // Isolate per-row failures; never log institution details (counts-only convention).
                 counts.errors += 1
-                app.logger().warn('[backfill:sync_config] row failed', 'error', String(err))
+                app.logger().warn('[backfill:sync_config] row failed', 'error', errorMessage(err))
             }
         }
         if (batch.length < PAGE) break

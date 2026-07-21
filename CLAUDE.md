@@ -52,18 +52,18 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 │                            #   aborted resets the requested item to 'available' atomically (elevated tx)
 ├── integration_sync.pb.js   # cron registration: integration_sync + integration_refresh — as of #487
 │                            #   Phase 2 BOTH run LOCALLY via integrations/{sync,refresh}.js (see below)
-├── integration_backfill.pb.js # #487 Phase 2: guarded test route POST /api/_test/backfill-sync-config
-│                            #   (only when INTEGRATION_TEST_ROUTE=true; superuser)
 ├── integrations/            # #487 backend integration port (Goja, ES5-ish): sync.js (runSync() full
 │                            #   pull + archive-guard), refresh.js (runRefresh() per-item + circuit-
 │                            #   breaker + ordered registry [winbiap, leihbackend]), db.js (findSyncConfigs
 │                            #   + applyDiff), diff.js, leihbackend.js (mapItem + fetchAllItems), winbiap.js,
-│                            #   urlGuard.js, types.js
+│                            #   urlGuard.js, types.js, import.js (CSV apply/preview/refresh, Phase 3)
 ├── services/                # shared business logic: group.js, notification.js, mail.js, syncConfig.js
 │                            #   (backfillSyncConfigs — users.leihbackendUrl → sync_config, #487 Phase 2)
+├── integration_import.pb.js # #487 Phase 3: CSV-import write path — POST /api/import/{apply,preview,
+│                            #   refresh} (requireAuth, institution-only, owner = e.auth.id)
 ├── utils/                   # common.js (nowIso, formatDateTime, uniqueBy), db.js
 ├── views/                   # email HTML templates (layout.html + mail/)
-├── jobs/                    # cron job bodies: integrationSync.js
+├── jobs/                    # cron job bodies: retention.js  (integrationSync.js removed in #487 Phase 3)
 ├── routes/                  # placeholder — routes currently live in *.pb.js
 ├── account.pb.js            # DELETE /api/account + export, deleted-login block, lastLoginAt stamp,
 │                            #   users email normalization (trim+lowercase) on create/update (#557)
@@ -201,7 +201,9 @@ thing (SvelteKit) — these are PocketBase routes:
 | POST | `/api/legal/accept` | legal.pb.js | Record the user's acceptance of the active legal docs (snapshot from `legal_documents`), refresh their version cache, clear any lock — transactional, superuser; auth required |
 | POST | `/api/legal/decline` | legal.pb.js | Record rejection of the active legal docs and set `legalLocked` — transactional, superuser; auth required |
 | POST | `/api/_test/run-retention/{job}` | retention.pb.js | Test-only: run a retention job with an explicit `cutoff`. Registered ONLY when `RETENTION_TEST_ROUTE=true`; superuser required. Not present in production |
-| POST | `/api/_test/backfill-sync-config` | integration_backfill.pb.js | Test-only: run the `users.leihbackendUrl` → `sync_config` backfill and return counts. Registered ONLY when `INTEGRATION_TEST_ROUTE=true`; superuser required. Not present in production |
+| POST | `/api/import/apply` | integration_import.pb.js | CSV-import write path (#487 Phase 3): body `{rows}` (no owner), stamps `owner = e.auth.id`, dedupes keep-last, diffs + writes create/update/archive in a transaction → `SyncSummary`. Auth required; institution-only (403 otherwise); no archive-guard (user-confirmed full upload) |
+| POST | `/api/import/preview` | integration_import.pb.js | dryRun of `/api/import/apply` — same diff, **no write** → `{summary, rowActions, archiveRows}`. Auth required; institution-only |
+| POST | `/api/import/refresh` | integration_import.pb.js | Refreshes only the caller's own items (`findSyncConfigs` for `e.auth.id` + `refreshInstitution`) → `SyncSummary`. Auth required; institution-only. Replaces the old frontend `/api/refresh?institution=` |
 
 ## Scheduled jobs (`retention.pb.js` + `jobs/retention.js`)
 
@@ -303,13 +305,10 @@ All env/config is centralized here; most have safe defaults:
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | `VAPID_*` | — / `mailto:allerleih@posteo.de` | Web-push |
 | `DRY_MODE` | `DRY_MODE` | `false` | When `true`, skips sending email/notifications (local dev) |
 | `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
-| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — target of the sync/refresh cron calls. **Must be `https://` unless loopback** — the sync secret travels as a Bearer header (non-loopback `http://` logs a startup warning) |
-| `SYNC_SECRET` | `SYNC_SECRET` | `''` | Bearer token for the frontend's `/api/sync` + `/api/refresh`; must equal the frontend's `SYNC_SECRET` |
-| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull; empty disables the job. **#487 Phase 2: runs LOCALLY** (`integrations/sync.js`) — needs neither `FRONTEND_URL` nor `SYNC_SECRET` |
-| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh; empty disables the job. **#487 Phase 1: runs LOCALLY** (`integrations/refresh.js`) — needs neither `FRONTEND_URL` nor `SYNC_SECRET` |
-| `SYNC_TIMEOUT_SECONDS` | `SYNC_TIMEOUT_SECONDS` | `540` | HTTP timeout for the frontend's **manual** `/api/sync` call. Both cron jobs write direct via `$app`, no HTTP timeout |
+| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash). Used for the #447 auth-mail links (host of the `users` verification/reset URLs) and as the `APP_URL` fallback — **not** for integration sync (that runs fully in the backend since #487 Phase 3) |
+| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull; empty disables the job. Runs LOCALLY (`integrations/sync.js`) — no HTTP, only a valid expression |
+| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh; empty disables the job. Runs LOCALLY (`integrations/refresh.js`) — no HTTP, only a valid expression |
 | `INTEGRATION_ALLOW_INSECURE_URL` | `INTEGRATION_ALLOW_INSECURE_URL` | `false` | Allow `http://` + private/loopback source base URLs, bypassing the `integrations/urlGuard.js` SSRF check — for **both** sync (`fetchAllItems`) and refresh (`fetchItemById`). **Local dev / integration tests only — never in production** |
-| `INTEGRATION_TEST_ROUTE` | `INTEGRATION_TEST_ROUTE` | `false` (unset) | When `'true'`, registers the guarded backfill route `POST /api/_test/backfill-sync-config` (`integration_backfill.pb.js`, superuser). **Local dev / tests only** — the route does not exist in production |
 | `RETENTION_INACTIVE_MONTHS` | `RETENTION_INACTIVE_MONTHS` | `6` | Anonymize accounts with no login for N months (0 = off) |
 | `RETENTION_MESSAGES_MONTHS` | `RETENTION_MESSAGES_MONTHS` | `6` | Delete conversations N months after last activity (0 = off) |
 | `RETENTION_NOTIFICATIONS_DAYS` | `RETENTION_NOTIFICATIONS_DAYS` | `90` | Delete in-app notifications after N days (0 = off) |
@@ -328,9 +327,8 @@ geocoding, and email don't work for real.
 
 ## Cron jobs (`integration_sync.pb.js` + `integrations/` + `services/syncConfig.js`)
 
-Two jobs, registered from `constants.js`. **As of #487 Phase 2 BOTH run locally in the backend**
-(no HTTP POST to the frontend); `jobs/integrationSync.js` is now unused (kept for rollback, removed
-in Phase 3):
+Two jobs, registered from `constants.js`. **Both run locally in the backend** (no HTTP POST to the
+frontend; the old `jobs/integrationSync.js` frontend-POST bodies were removed in #487 Phase 3):
 
 - **`integration_sync`** (full catalogue pull) — `require(\`${__hooks}/integrations/sync.js\`).runSync()`:
   pages each leihbackend institution's `item_public` feed, diffs, and applies creates/updates/archives
@@ -353,18 +351,12 @@ unscheduled without affecting the sibling. Superusers can inspect and manually f
 UI (Settings → Crons) or via `GET /api/crons` / `POST /api/crons/{id}` — the tests use the latter
 (`tests/integration-sync.test.mjs`, `tests/integration-refresh.test.mjs`, `tests/sync-config.test.mjs`,
 `tests/cron-sync*.test.mjs`). Each logs one counts-only summary line per institution
-(`[cron:sync|refresh] <inst>: fetched=… …`), never item content or PII. The `sync_config` backfill
-(`services/syncConfig.js`, run by a data migration + the guarded `INTEGRATION_TEST_ROUTE` route) seeds
-config rows from existing `users.leihbackendUrl` values. Operational details live in the frontend repo:
+(`[cron:sync|refresh] <inst>: fetched=… …`), never item content or PII. The CSV-import write path
+(`integrations/import.js` behind `integration_import.pb.js`) reuses the same `diff.js`/`db.js`. The
+`sync_config` backfill (`services/syncConfig.js`, run once by data migration
+`1784658387_backfill_sync_config.js`) seeded config rows from the historical `users.leihbackendUrl`
+values (that field was removed from `users` in #487 Phase 3). Operational details live in the frontend repo:
 `docs/operations/integration-sync.md`.
-
-> **⚠️ Temporary double truth (until #487 Phase 3).** The diff/write logic exists **twice**: the
-> Goja port in `pb_hooks/integrations/` (`diff.js`, `db.js`) **and** its TS twin in the frontend
-> (`src/lib/server/integrations/`), which still runs for the CSV import. `SYNCED_FIELDS`
-> (`integrations/types.js` ↔ `core/types.ts`) and `DESCRIPTION_PREFIX` (`integrations/diff.js` ↔
-> `$lib/server/itemArchive.ts`) **MUST stay byte-identical** across both repos — a drift in the
-> prefix re-archives all existing stock (the "already archived" skip matches on it). Phase 3
-> removes the frontend copy and this note.
 
 > **Redirect residual (SSRF).** The refresh uses `$http.send`, which auto-follows redirects and
 > exposes no policy hook (spike #487 §4.4). The literal-URL guard in `integrations/urlGuard.js`

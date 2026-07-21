@@ -94,8 +94,6 @@ async function seedInstitution(opts) {
         passwordConfirm: 'test1234',
         username,
         isInstitution: true,
-        leihbackendUrl: opts.leihbackendUrl,
-        leihbackendItemUrlTemplate: opts.urlTemplate || '',
         city: opts.city || '',
     })
     assert.equal(created.status, 200, `seed institution ${username}: ${JSON.stringify(created.json)}`)

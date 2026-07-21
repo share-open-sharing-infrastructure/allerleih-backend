@@ -82,7 +82,6 @@ async function seedInstitution(opts) {
     const created = await api('POST', '/api/collections/users/records', t, {
         email: `${username}@test.local`, password: 'test1234', passwordConfirm: 'test1234',
         username, isInstitution: true, city: opts.city || '',
-        leihbackendUrl: opts.baseUrl, leihbackendItemUrlTemplate: opts.urlTemplate || '',
     })
     assert.equal(created.status, 200, `seed institution ${username}: ${JSON.stringify(created.json)}`)
     const id = created.json.id
