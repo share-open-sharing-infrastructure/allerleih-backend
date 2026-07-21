@@ -9,9 +9,9 @@
  * `runRefresh()` is the cron entrypoint (see integration_sync.pb.js).
  */
 
-const { makeSummary, errorMessage } = require(`${__hooks}/integrations/types.js`)
+const { makeSummary, errorMessage, logIntegrationSummary } = require(`${__hooks}/integrations/types.js`)
 const { diffItems } = require(`${__hooks}/integrations/diff.js`)
-const { loadExistingItems, findSyncInstitutions, applyDiff } = require(`${__hooks}/integrations/db.js`)
+const { loadExistingItems, findSyncConfigs, applyDiff } = require(`${__hooks}/integrations/db.js`)
 const { winbiapRefreshIntegration } = require(`${__hooks}/integrations/winbiap.js`)
 const { leihbackendRefreshIntegration } = require(`${__hooks}/integrations/leihbackend.js`)
 
@@ -140,33 +140,6 @@ function refreshInstitution(app, institution, integrations) {
     return summary
 }
 
-/** Logs one per-institution summary line — counts only, never item content or user PII. */
-function logSummary(summary) {
-    const line =
-        '[cron:refresh] ' +
-        summary.institution +
-        ': fetched=' +
-        summary.fetched +
-        ' created=' +
-        summary.created +
-        ' updated=' +
-        summary.updated +
-        ' archived=' +
-        summary.archived +
-        ' skipped=' +
-        summary.skipped +
-        ' errors=' +
-        summary.errors.length +
-        ' (' +
-        summary.durationMs +
-        'ms)'
-    if (summary.errors.length > 0) {
-        $app.logger().error(line, 'errors', JSON.stringify(summary.errors))
-    } else {
-        $app.logger().info(line)
-    }
-}
-
 /**
  * Cron entrypoint: refreshes every configured institution locally. Guarded by a
  * concurrency-safe overlap lock in `$app.store()` (shared with the future backend sync port,
@@ -202,7 +175,9 @@ function runRefresh(institutionId) {
     try {
         let institutions
         try {
-            institutions = findSyncInstitutions($app, institutionId)
+            // #487 Phase 2: discovery reads sync_config (all enabled integrations for the refresh
+            // path). claimsInstitution then routes each config's items by its `integration` field.
+            institutions = findSyncConfigs($app, { institutionId: institutionId })
         } catch (err) {
             $app.logger().error('[cron:refresh] institution discovery failed', 'error', errorMessage(err))
             return
@@ -217,7 +192,7 @@ function runRefresh(institutionId) {
         for (let i = 0; i < institutions.length; i++) {
             // Per-institution failures are isolated inside refreshInstitution (summary.errors);
             // one bad institution never stops the others.
-            logSummary(refreshInstitution($app, institutions[i], integrations))
+            logIntegrationSummary($app, '[cron:refresh]', refreshInstitution($app, institutions[i], integrations))
         }
     } finally {
         // Only the lock holder reaches here — release it (never leak the lock on an exception).

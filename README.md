@@ -77,12 +77,23 @@ or via the service/deployment config in production.
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | for Web Push | — | VAPID keypair for push notifications. |
 | `VAPID_SUBJECT` | no | `mailto:allerleih@posteo.de` | VAPID subject (mailto: or https: URI). |
 | `LOG_LEVEL` | no | `4` | Log verbosity: 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR. |
-| `DRY_MODE` | no | `false` | When `true`, suppresses side effects such as outbound email. |
+| `DRY_MODE` | no | `false` | When `true`, suppresses side effects such as outbound email (and skips the integration cron fetches/writes). |
 | `MAIL_THROTTLE_MINUTES` | no | `15` | Max one notification email per recipient within this window. |
+| `SYNC_CRON` | no | `''` (off) | Cron expression for the full catalogue pull. **#487 Phase 2: runs locally in the backend** (`integrations/sync.js`) — needs neither `FRONTEND_URL` nor `SYNC_SECRET`. |
+| `REFRESH_CRON` | no | `''` (off) | Cron expression for the per-item refresh (`integrations/refresh.js`, local). Also needs no `FRONTEND_URL`/`SYNC_SECRET`. |
+| `INTEGRATION_ALLOW_INSECURE_URL` | no | `false` | Allow `http://` + private/loopback source base URLs (bypasses the SSRF guard). **Local dev / tests only — never in production.** |
+| `INTEGRATION_TEST_ROUTE` | no | `false` | When `'true'`, registers the guarded backfill route `POST /api/_test/backfill-sync-config` (superuser). **Local dev / tests only** — absent in production. |
 
 > **Note:** travel-time computation moved from the frontend into this backend
 > hook, so `ORS_API_KEY` must be present **here** (the frontend still needs its
 > own `ORS_API_KEY` for address autocomplete via `/api/geocode`).
+
+> **Integration sync (#487 Phase 2):** the `SYNC_CRON` + `REFRESH_CRON` jobs now run entirely in
+> the backend (native `$app`, per-institution transaction, `sync_config` discovery) — they no
+> longer POST the frontend, so `FRONTEND_URL` / `SYNC_SECRET` / `SYNC_TIMEOUT_SECONDS` are needed
+> only for the frontend's remaining **manual** `/api/sync` + `/api/refresh` (dropped in Phase 3).
+> The full env table lives in [`pb_hooks/constants.js`](pb_hooks/constants.js). This repo has no
+> `.env.example`; set variables in the `pocketbase serve` process environment.
 
 ## Mail & SMTP configuration
 

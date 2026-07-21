@@ -1,9 +1,10 @@
 /// <reference path="../../pb_data/types.d.ts" />
 
 /**
- * PocketBase data-layer for the integration refresh port (share-mvp#487 Phase 1).
- * Goja port of share-mvp `core/pocketbase.ts` (loadExistingItems, findSyncInstitutions) and
- * `core/write.ts` (applyDiff). The TS superuser-client cache, 401 re-auth wrapper, HTTP batching,
+ * PocketBase data-layer for the integration sync/refresh port (share-mvp#487).
+ * Goja port of share-mvp `core/pocketbase.ts` (loadExistingItems; discovery is now
+ * `findSyncConfigs` reading the `sync_config` collection, #487 Phase 2) and `core/write.ts`
+ * (applyDiff). The TS superuser-client cache, 401 re-auth wrapper, HTTP batching,
  * inter-batch pauses and per-batch error accumulation are ALL dropped: hooks use native `$app`
  * (elevated, no rate limits) and write inside a per-institution transaction (all-or-nothing).
  *
@@ -60,30 +61,63 @@ function loadExistingItems(app, ownerId) {
 }
 
 /**
- * Finds institutions configured for source sync: `isInstitution = true` with a non-empty
- * base URL. Optionally restricted to one id. Interim discovery on the overloaded
- * `leihbackendUrl` (replaced by a dedicated `sync_config` collection in Phase 2).
+ * Discovers institutions configured for source sync/refresh from the `sync_config` collection
+ * (#487 Phase 2 — replaces the old `users.leihbackendUrl` discovery for the backend cron paths).
+ * Each config is joined to its institution `users` record for `username`/`city`.
+ *
+ * The returned `id` is the institution's **user id** (= item `owner`), unchanged from the old
+ * shape, so `loadExistingItems(app, institution.id)` and the `owner` write in `applyDiff` keep
+ * working without any further ripple.
  *
  * @param {any} app - `$app` or a transaction app.
- * @param {string} [institutionId] - restrict to this single institution id.
- * @returns {Array} plain `SyncInstitution` objects (empty if the id is given but not found).
+ * @param {object} [options]
+ * @param {string} [options.integration] - restrict to one integration (`'leihbackend'`/`'winbiap'`).
+ * @param {string} [options.institutionId] - restrict to one institution (its user id).
+ * @param {boolean} [options.includeDisabled] - include `enabled = false` configs (default: skip them).
+ * @returns {Array<{configId, id, username, city, integration, baseUrl, itemUrlTemplate, enabled}>}
  */
-function findSyncInstitutions(app, institutionId) {
-    let filter = 'isInstitution = true && leihbackendUrl != ""'
-    let params = {}
-    if (institutionId) {
-        filter += ' && id = {:id}'
-        params = { id: institutionId }
+function findSyncConfigs(app, options) {
+    const opts = options || {}
+    const conditions = []
+    const params = {}
+    if (!opts.includeDisabled) conditions.push('enabled = true')
+    if (opts.integration) {
+        conditions.push('integration = {:integration}')
+        params.integration = opts.integration
     }
-    // Institutions are few — one generous page suffices (no source has thousands of accounts).
-    const records = app.findRecordsByFilter('users', filter, '', 500, 0, params)
-    return records.map((record) => ({
-        id: record.id,
-        username: record.getString('username'),
-        city: record.getString('city'),
-        leihbackendUrl: record.getString('leihbackendUrl'),
-        leihbackendItemUrlTemplate: record.getString('leihbackendItemUrlTemplate'),
-    }))
+    if (opts.institutionId) {
+        conditions.push('institution = {:institutionId}')
+        params.institutionId = opts.institutionId
+    }
+    // 'id != ""' matches all — used only when includeDisabled and no other filter is given.
+    const filter = conditions.length > 0 ? conditions.join(' && ') : 'id != ""'
+
+    // Configs are few (one or two per institution) — one generous page suffices.
+    const configs = app.findRecordsByFilter('sync_config', filter, '', 500, 0, params)
+    const out = []
+    for (let i = 0; i < configs.length; i++) {
+        const cfg = configs[i]
+        const institutionId = cfg.getString('institution')
+        let user
+        try {
+            user = app.findRecordById('users', institutionId)
+        } catch (err) {
+            // Institution vanished (a cascadeDelete would remove the config too, so this is
+            // defensive only) — skip the orphan config rather than fail the whole run.
+            continue
+        }
+        out.push({
+            configId: cfg.id,
+            id: institutionId, // institution user id = item owner (loadExistingItems/applyDiff unchanged)
+            username: user.getString('username'),
+            city: user.getString('city'),
+            integration: cfg.getString('integration'),
+            baseUrl: cfg.getString('baseUrl'),
+            itemUrlTemplate: cfg.getString('itemUrlTemplate'),
+            enabled: cfg.getBool('enabled'),
+        })
+    }
+    return out
 }
 
 /**
@@ -140,4 +174,4 @@ function applyDiff(txApp, diff) {
     return { created: created, updated: updated, archived: archived }
 }
 
-module.exports = { loadExistingItems, findSyncInstitutions, applyDiff }
+module.exports = { loadExistingItems, findSyncConfigs, applyDiff }
