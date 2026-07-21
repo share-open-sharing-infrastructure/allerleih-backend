@@ -244,10 +244,39 @@ function computeIntegrations(app) {
 const OUTBOUND_TOP_N = 20
 
 /**
+ * Extracts the hostname from a `destination` URL (e.g. "https://uber.space/x" ->
+ * "uber.space"), lowercased. No `URL` global in the PocketBase JSVM (goja) — a plain
+ * regex is the portable option here. Returns null for anything that doesn't look like
+ * an http(s) URL, so a malformed/stripped destination is excluded rather than
+ * miscounted under a garbage key.
+ */
+function extractDomain(destination) {
+    if (!destination) return null
+    const match = /^https?:\/\/([^\/:?#]+)/i.exec(destination)
+    return match ? match[1].toLowerCase() : null
+}
+
+/** Group records by the domain of a URL field, returning [{domain, count}] sorted by count desc. */
+function groupByDomain(records, urlField) {
+    const counts = new Map()
+    records.forEach((r) => {
+        const domain = extractDomain(r.get(urlField))
+        if (!domain) return
+        counts.set(domain, (counts.get(domain) || 0) + 1)
+    })
+    return Array.from(counts.entries())
+        .map(([domain, count]) => ({ domain, count }))
+        .sort((a, b) => b.count - a.count)
+}
+
+/**
  * outbound_clicks has no `owner` column of its own — only an optional `item` relation
  * (a click with no item, e.g. a stripped/unknown destination, can't be attributed and
  * is excluded from this breakdown, though it still counts in `total`/`last30d`). The
- * owner is resolved one hop through the clicked item.
+ * owner is resolved one hop through the clicked item. `byDomain30d` is independent —
+ * it groups directly by the destination URL's host, so it also covers clicks that
+ * fall through the owner lookup, and shows which external sites traffic actually
+ * heads to regardless of which of our items linked there.
  */
 function computeOutboundClicks(app, cutoff30) {
     const recentClicks = app.findRecordsByFilter('outbound_clicks', 'created >= {:c}', '', 0, 0, { c: cutoff30 })
@@ -279,6 +308,7 @@ function computeOutboundClicks(app, cutoff30) {
         total: countFilter(app, 'outbound_clicks', ''),
         last30d: recentClicks.length,
         byItemOwner30d,
+        byDomain30d: groupByDomain(recentClicks, 'destination').slice(0, OUTBOUND_TOP_N),
     }
 }
 

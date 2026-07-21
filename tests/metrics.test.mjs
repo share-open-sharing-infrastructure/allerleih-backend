@@ -175,3 +175,32 @@ test('outbound clicks are attributed to the clicked item\'s owner, not left unat
 	assert.ok(ownerEntry, 'the click is attributed to the item owner via the item relation')
 	assert.ok(ownerEntry.count >= 1)
 })
+
+test('outbound clicks are grouped by destination domain, independent of item attribution', async () => {
+	const clicker = await makeUser('mtsclicker5')
+
+	await api('POST', '/api/collections/outbound_clicks/records', clicker.t, {
+		destination: 'https://partner-a.example/artikel/1',
+		source_page: 'item-detail',
+	})
+	await api('POST', '/api/collections/outbound_clicks/records', clicker.t, {
+		destination: 'https://partner-a.example/artikel/2',
+		source_page: 'search',
+	})
+	await api('POST', '/api/collections/outbound_clicks/records', clicker.t, {
+		destination: 'https://PARTNER-B.example:8443/x',
+		source_page: 'item-detail',
+	})
+
+	const snapshot = await runSnapshot()
+	assert.equal(snapshot.status, 200)
+
+	const rows = await api('GET', '/api/collections/metrics_daily/records?sort=-date&perPage=1', adminAuth())
+	const byDomain = rows.json.items[0].metrics.outboundClicks.byDomain30d
+	const a = byDomain.find((e) => e.domain === 'partner-a.example')
+	const b = byDomain.find((e) => e.domain === 'partner-b.example')
+	assert.ok(a, 'groups by hostname regardless of path')
+	assert.equal(a.count, 2)
+	assert.ok(b, 'lowercases the host and strips the port')
+	assert.equal(b.count, 1)
+})
