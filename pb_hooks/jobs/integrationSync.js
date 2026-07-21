@@ -1,9 +1,16 @@
 /// <reference path="../../pb_data/types.d.ts" />
 
 /**
+ * ⚠️ UNUSED as of #487 Phase 2 — removed in Phase 3.
+ *
+ * Both cron jobs now run locally in the backend (integrations/sync.js + integrations/refresh.js),
+ * so nothing calls `triggerIntegrationEndpoint` anymore. It is kept only so a rollback can point a
+ * cron body back at the frontend POST if needed; Phase 3 deletes this file together with the
+ * frontend's `/api/sync` + `/api/refresh` endpoints.
+ *
  * Cron job bodies for the integration sync — POST the frontend's bearer-protected
  * /api/sync and /api/refresh endpoints, which pull institutional catalogues from
- * their external lending software. Registered in integration_sync.pb.js.
+ * their external lending software.
  */
 
 /**

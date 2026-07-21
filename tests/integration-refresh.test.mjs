@@ -79,6 +79,12 @@ function winbiapHandler(statusId) {
 // --- seeding + polling helpers ------------------------------------------------------------
 
 let instSeq = 0
+/**
+ * Seeds an institution user AND (as of #487 Phase 2) its `sync_config` row — the backend cron
+ * discovers institutions from `sync_config`, not `users.leihbackendUrl`. Integration is derived
+ * from the URL (`/webopac` → winbiap, else leihbackend), mirroring the backfill's `isWinbiapUrl`.
+ * `users.leihbackendUrl` is still seeded (dual-truth interim; the frontend manual path uses it).
+ */
 async function seedInstitution(opts) {
     const t = adminAuth()
     const username = opts.username || `inst${++instSeq}`
@@ -93,7 +99,18 @@ async function seedInstitution(opts) {
         city: opts.city || '',
     })
     assert.equal(created.status, 200, `seed institution ${username}: ${JSON.stringify(created.json)}`)
-    return { id: created.json.id, username }
+    const id = created.json.id
+
+    const integration = /\/webopac/i.test(opts.leihbackendUrl || '') ? 'winbiap' : 'leihbackend'
+    const cfg = await api('POST', '/api/collections/sync_config/records', t, {
+        institution: id,
+        integration,
+        baseUrl: opts.leihbackendUrl,
+        itemUrlTemplate: opts.urlTemplate || '',
+        enabled: opts.enabled === false ? false : true,
+    })
+    assert.equal(cfg.status, 200, `seed sync_config ${username}: ${JSON.stringify(cfg.json)}`)
+    return { id, username }
 }
 
 async function seedItem(fields) {
