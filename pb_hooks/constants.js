@@ -46,13 +46,23 @@ const MAIL_THROTTLE_MINUTES = intEnv('MAIL_THROTTLE_MINUTES', 15)
 const FRONTEND_URL = ($os.getenv('FRONTEND_URL') || '').replace(/\/+$/, '')
 /** Bearer token for /api/sync + /api/refresh — must equal the frontend's SYNC_SECRET */
 const SYNC_SECRET = $os.getenv('SYNC_SECRET') || ''
-/** Cron expression for the full catalogue pull (POST /api/sync); empty = job disabled */
+/** Cron expression for the full catalogue pull (POST /api/sync); empty = job disabled.
+ * Phase 1 (#487): still POSTs the frontend — FRONTEND_URL + SYNC_SECRET remain required for it. */
 const SYNC_CRON = $os.getenv('SYNC_CRON') || ''
-/** Cron expression for the per-item refresh (POST /api/refresh); empty = job disabled */
+/** Cron expression for the per-item refresh; empty = job disabled.
+ * Phase 1 (#487): now runs LOCALLY in the backend (pb_hooks/integrations/refresh.js) — no longer
+ * POSTs the frontend, so it needs neither FRONTEND_URL nor SYNC_SECRET, only a valid expression. */
 const REFRESH_CRON = $os.getenv('REFRESH_CRON') || ''
-/** HTTP timeout for the sync/refresh calls — a full sync can take minutes (the frontend
- * batches creates 15-at-a-time with 5.5s pauses to stay under PocketBase rate limits) */
+/** HTTP timeout for the frontend sync call — a full sync can take minutes (the frontend batches
+ * creates 15-at-a-time with 5.5s pauses to stay under PocketBase rate limits). Refresh no longer
+ * uses it (writes go direct via $app). */
 const SYNC_TIMEOUT_SECONDS = intEnv('SYNC_TIMEOUT_SECONDS', 540)
+/**
+ * Allow http:// and private/loopback integration base URLs, bypassing the SSRF guard in
+ * pb_hooks/integrations/urlGuard.js. Local dev / integration tests only (e.g. loopback stub
+ * servers) — NEVER set in production. Backend replacement for the frontend's Vite `dev` flag.
+ */
+const INTEGRATION_ALLOW_INSECURE_URL = $os.getenv('INTEGRATION_ALLOW_INSECURE_URL') === 'true'
 
 /**
  * GDPR data-retention windows (#461) — enforced by the nightly jobs in
@@ -129,6 +139,7 @@ module.exports = {
     SYNC_CRON,
     REFRESH_CRON,
     SYNC_TIMEOUT_SECONDS,
+    INTEGRATION_ALLOW_INSECURE_URL,
     RETENTION_INACTIVE_MONTHS,
     RETENTION_MESSAGES_MONTHS,
     RETENTION_NOTIFICATIONS_DAYS,

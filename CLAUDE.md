@@ -50,7 +50,11 @@ pb_hooks/                    # custom server logic (auto-loaded JS)
 ├── lending.pb.js            # #373 conversations onRecordUpdateRequest guard: only a participant may
 │                            #   abort (lendingStatus → 'aborted') from pending/accepted; on accepted →
 │                            #   aborted resets the requested item to 'available' atomically (elevated tx)
-├── integration_sync.pb.js   # cron jobs POSTing the frontend's /api/sync + /api/refresh (see below)
+├── integration_sync.pb.js   # cron: integration_sync (POSTs frontend /api/sync) + integration_refresh
+│                            #   (as of #487 Phase 1 runs LOCALLY via integrations/refresh.js — see below)
+├── integrations/            # #487 Phase 1: backend per-item refresh port (Goja, ES5-ish). refresh.js
+│                            #   (runRefresh() cron entry + circuit-breaker + ordered registry [winbiap,
+│                            #   leihbackend]), diff.js, db.js, leihbackend.js, winbiap.js, urlGuard.js, types.js
 ├── services/                # shared business logic: group.js, notification.js, mail.js
 ├── utils/                   # common.js (nowIso, formatDateTime, uniqueBy), db.js
 ├── views/                   # email HTML templates (layout.html + mail/)
@@ -295,9 +299,10 @@ All env/config is centralized here; most have safe defaults:
 | `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
 | `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — target of the sync/refresh cron calls. **Must be `https://` unless loopback** — the sync secret travels as a Bearer header (non-loopback `http://` logs a startup warning) |
 | `SYNC_SECRET` | `SYNC_SECRET` | `''` | Bearer token for the frontend's `/api/sync` + `/api/refresh`; must equal the frontend's `SYNC_SECRET` |
-| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull (`POST /api/sync`); empty disables the job |
-| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh (`POST /api/refresh`); empty disables the job |
-| `SYNC_TIMEOUT_SECONDS` | `SYNC_TIMEOUT_SECONDS` | `540` | HTTP timeout for the sync/refresh calls (a full sync can take minutes) |
+| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull (`POST /api/sync`); empty disables the job. Still needs `FRONTEND_URL` + `SYNC_SECRET` |
+| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh; empty disables the job. **#487 Phase 1: runs LOCALLY** (`integrations/refresh.js`) — needs neither `FRONTEND_URL` nor `SYNC_SECRET` |
+| `SYNC_TIMEOUT_SECONDS` | `SYNC_TIMEOUT_SECONDS` | `540` | HTTP timeout for the frontend **sync** call (a full sync can take minutes). Refresh writes direct via `$app`, no HTTP timeout |
+| `INTEGRATION_ALLOW_INSECURE_URL` | `INTEGRATION_ALLOW_INSECURE_URL` | `false` | Refresh only: allow `http://` + private/loopback source base URLs, bypassing the `integrations/urlGuard.js` SSRF check. **Local dev / integration tests only — never in production** (backend replacement for the frontend's Vite `dev` flag) |
 | `RETENTION_INACTIVE_MONTHS` | `RETENTION_INACTIVE_MONTHS` | `6` | Anonymize accounts with no login for N months (0 = off) |
 | `RETENTION_MESSAGES_MONTHS` | `RETENTION_MESSAGES_MONTHS` | `6` | Delete conversations N months after last activity (0 = off) |
 | `RETENTION_NOTIFICATIONS_DAYS` | `RETENTION_NOTIFICATIONS_DAYS` | `90` | Delete in-app notifications after N days (0 = off) |
@@ -314,16 +319,42 @@ All env/config is centralized here; most have safe defaults:
 Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
 geocoding, and email don't work for real.
 
-## Cron jobs (`integration_sync.pb.js` + `jobs/integrationSync.js`)
+## Cron jobs (`integration_sync.pb.js` + `jobs/integrationSync.js` + `integrations/`)
 
-When `SYNC_CRON` / `REFRESH_CRON` are set (and `FRONTEND_URL` + `SYNC_SECRET` are present), the
-backend registers the cron jobs `integration_sync` and `integration_refresh`, which POST the
-frontend's bearer-protected integration endpoints on that schedule. A misconfigured job (cron set
-but URL/secret missing, or a syntactically invalid cron expression) logs an error and is not
-scheduled without affecting the sibling job; `DRY_MODE` skips the outbound call.
-Superusers can inspect and manually fire the jobs in the admin UI (Settings → Crons) or via
-`GET /api/crons` / `POST /api/crons/{id}` — the tests use the latter. Operational details live in
-the frontend repo: `docs/operations/integration-sync.md`.
+Two jobs, registered from `constants.js`. **As of #487 Phase 1 they behave differently:**
+
+- **`integration_sync`** (full catalogue pull) — unchanged: when `SYNC_CRON` is set *and*
+  `FRONTEND_URL` + `SYNC_SECRET` are present, POSTs the frontend's bearer-protected `/api/sync`
+  on schedule (`jobs/integrationSync.js`). `DRY_MODE` skips the outbound call.
+- **`integration_refresh`** (per-item refresh) — now runs **locally in the backend** via
+  `require(\`${__hooks}/integrations/refresh.js\`).runRefresh()`: native `$app`, a per-institution
+  `runInTransaction` (all-or-nothing), and a concurrency-safe `$app.store()` overlap lock
+  (`integrationRunLock`, shared with the future backend sync port — both write `items`). It needs
+  **only a valid `REFRESH_CRON`** (no `FRONTEND_URL`/`SYNC_SECRET`). `DRY_MODE` logs and skips all
+  upstream fetches + writes. Discovery is the interim `findSyncInstitutions` (`isInstitution = true
+  && leihbackendUrl != ""`); WINBIAP vs. leihbackend is detected from the base URL (`/webopac`).
+
+Fail-soft is per job: a syntactically invalid cron expression (or, for sync only, a missing
+`FRONTEND_URL`/`SYNC_SECRET`) logs an error and leaves that job unscheduled without affecting the
+sibling. Superusers can inspect and manually fire both in the admin UI (Settings → Crons) or via
+`GET /api/crons` / `POST /api/crons/{id}` — the tests use the latter
+(`tests/integration-refresh.test.mjs`, `tests/cron-sync*.test.mjs`). Refresh logs one counts-only
+summary line per institution (`[cron:refresh] <inst>: fetched=… …`), never item content or PII.
+Operational details live in the frontend repo: `docs/operations/integration-sync.md`.
+
+> **⚠️ Temporary double truth (until #487 Phase 3).** The diff/write logic exists **twice**: the
+> Goja port in `pb_hooks/integrations/` (`diff.js`, `db.js`) **and** its TS twin in the frontend
+> (`src/lib/server/integrations/`), which still runs for the CSV import. `SYNCED_FIELDS`
+> (`integrations/types.js` ↔ `core/types.ts`) and `DESCRIPTION_PREFIX` (`integrations/diff.js` ↔
+> `$lib/server/itemArchive.ts`) **MUST stay byte-identical** across both repos — a drift in the
+> prefix re-archives all existing stock (the "already archived" skip matches on it). Phase 3
+> removes the frontend copy and this note.
+
+> **Redirect residual (SSRF).** The refresh uses `$http.send`, which auto-follows redirects and
+> exposes no policy hook (spike #487 §4.4). The literal-URL guard in `integrations/urlGuard.js`
+> can't catch a public base URL that 302-redirects onto an internal host — the frontend's
+> `redirect: 'manual'` semantics is not reproducible in Goja. Base URLs are admin-onboarded
+> (bounded risk); documented in the ops runbook.
 
 ## Keeping this file in sync
 
