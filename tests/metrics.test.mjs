@@ -204,3 +204,47 @@ test('outbound clicks are grouped by destination domain, independent of item att
 	assert.ok(b, 'lowercases the host and strips the port')
 	assert.equal(b.count, 1)
 })
+
+test('users.isAdmin is invisible via the API and cannot be self-set', async () => {
+	const alice = await makeUser('mtsadminflag1')
+	const bob = await makeUser('mtsadminflag2')
+
+	// Superuser flips alice to admin — the only supported way to grant it. The
+	// superuser's OWN response shows the hidden field (superuser requests bypass
+	// `hidden`) — that's exactly what $lib/server/metrics.ts's isAdmin() relies on.
+	const grant = await api('PATCH', `/api/collections/users/records/${alice.id}`, adminAuth(), { isAdmin: true })
+	assert.equal(grant.status, 200, JSON.stringify(grant.json))
+	assert.equal(grant.json.isAdmin, true)
+
+	// A regular user viewing their OWN row never sees the field either.
+	const ownView = await api('GET', `/api/collections/users/records/${alice.id}`, alice.t)
+	assert.equal(ownView.status, 200)
+	assert.equal(ownView.json.isAdmin, undefined, 'hidden fields never serialize for non-superuser requests')
+
+	// Nor can another authenticated user see it (the base users viewRule is broad).
+	const otherView = await api('GET', `/api/collections/users/records/${alice.id}`, bob.t)
+	assert.equal(otherView.status, 200)
+	assert.equal(otherView.json.isAdmin, undefined)
+
+	// A regular user cannot grant themselves admin via a self-update: the request
+	// itself succeeds (other fields are still writable), but a write to a hidden
+	// field from a non-superuser request is silently dropped rather than applied.
+	const selfGrant = await api('PATCH', `/api/collections/users/records/${bob.id}`, bob.t, { isAdmin: true })
+	assert.equal(selfGrant.status, 200)
+	const afterSelfGrant = await api(
+		'GET',
+		`/api/collections/users/records/${bob.id}?fields=id,isAdmin`,
+		adminAuth()
+	)
+	assert.equal(afterSelfGrant.json.isAdmin, false, 'the hidden-field write must be a no-op, not applied')
+
+	// The superuser CAN read it when explicitly requested — this is what the
+	// frontend's $lib/server/metrics.ts isAdmin() check relies on.
+	const suView = await api(
+		'GET',
+		`/api/collections/users/records/${alice.id}?fields=id,isAdmin`,
+		adminAuth()
+	)
+	assert.equal(suView.status, 200)
+	assert.equal(suView.json.isAdmin, true, 'superuser requests see hidden fields')
+})
