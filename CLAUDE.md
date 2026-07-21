@@ -47,13 +47,17 @@ pb_hooks/                    # custom server logic (auto-loaded JS), one file pe
 ├── notification.pb.js            # messages → in-app notification + throttled email
 ├── notification_guard.pb.js      # onRecordCreateRequest guard on user-created notifications
 ├── lending.pb.js                 # #373 conversations onRecordUpdateRequest guard (abort flow)
-├── integration_sync.pb.js        # cron: integration_sync (POSTs frontend /api/sync) + integration_refresh
-│                                 #   (#487 Phase 1: runs LOCALLY — see .claude/rules/integration-sync.md)
-├── integrations/                 # #487 Phase 1 Goja port of the per-item refresh: refresh.js, diff.js,
-│                                 #   db.js, leihbackend.js, winbiap.js, urlGuard.js, lock.js, types.js
+├── integration_sync.pb.js        # cron registration: integration_sync + integration_refresh — as of #487
+│                                 #   Phase 2 BOTH run LOCALLY (see .claude/rules/integration-sync.md)
+├── integration_backfill.pb.js    # #487 Phase 2: guarded test route POST /api/_test/backfill-sync-config
+│                                 #   (only when INTEGRATION_TEST_ROUTE=true; superuser)
+├── integrations/                 # #487 Goja port of the integration pipeline: sync.js (runSync full pull),
+│                                 #   refresh.js (runRefresh per-item), db.js (findSyncConfigs + applyDiff),
+│                                 #   diff.js, leihbackend.js, winbiap.js, urlGuard.js, lock.js, types.js
 ├── account.pb.js                 # DELETE /api/account + export, deleted-login block, email normalization (#557)
 ├── retention.pb.js               # GDPR retention cron jobs (#461) + guarded test route
-├── services/                     # shared business logic: account.js, group.js, legal.js, notification.js, mail.js
+├── services/                     # shared business logic: account.js, group.js, legal.js, notification.js,
+│                                 #   mail.js, syncConfig.js (backfill users.leihbackendUrl → sync_config)
 ├── utils/                        # common.js, email.js (normalizeEmail, #557), db.js
 ├── views/                        # email HTML templates (layout.html + mail/)
 ├── jobs/                         # cron job bodies: retention.js, integrationSync.js

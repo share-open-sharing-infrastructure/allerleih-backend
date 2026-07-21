@@ -163,12 +163,22 @@ function buildDescription(catalogData, exemplar) {
 }
 
 /**
- * True for institutions whose configured base URL is a WINBIAP WebOPAC (per the documented
- * convention, e.g. `https://rblg.stadt.lueneburg.de/webopac`). Interim source-type detection on
- * the overloaded `leihbackendUrl`, until a dedicated `sync_config` collection exists.
+ * True if a base URL is a WINBIAP WebOPAC, per the documented convention (path contains
+ * `/webopac`, e.g. `https://rblg.stadt.lueneburg.de/webopac`). The canonical source-type sniff —
+ * reused by `isWinbiapInstitution` and by the #487 Phase 2 `sync_config` backfill (do not
+ * re-implement the heuristic elsewhere).
+ */
+function isWinbiapUrl(url) {
+    return String(url || '').toLowerCase().indexOf('/webopac') >= 0
+}
+
+/**
+ * True for institutions served by the WINBIAP integration. As of #487 Phase 2 discovery comes
+ * from `sync_config`, so this reads the authoritative `integration` field rather than sniffing the
+ * URL. (`isWinbiapUrl` above stays as the sniff used by the one-time `sync_config` backfill.)
  */
 function isWinbiapInstitution(institution) {
-    return String((institution && institution.leihbackendUrl) || '').toLowerCase().indexOf('/webopac') >= 0
+    return !!institution && institution.integration === 'winbiap'
 }
 
 /**
@@ -225,7 +235,7 @@ function mapItem(record, storedItem, ownerId) {
  * records it and leaves the item untouched).
  */
 function refreshOne(institution, item) {
-    const baseUrl = (institution && institution.leihbackendUrl) || ''
+    const baseUrl = (institution && institution.baseUrl) || ''
     const result = fetchItemRecord(normalizeBaseUrl(baseUrl), item.externalId || '')
     if (!result.found) return { kind: 'gone' }
     return { kind: 'found', item: mapItem(result.record, item, institution.id) }
@@ -242,6 +252,7 @@ const winbiapRefreshIntegration = {
 
 module.exports = {
     winbiapRefreshIntegration,
+    isWinbiapUrl,
     isWinbiapInstitution,
     isWinbiapItem,
     statusFromMediaItems,

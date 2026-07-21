@@ -14,16 +14,15 @@ async function registeredCronIds() {
 	return res.json.map((j) => j.id)
 }
 
-test('SYNC_CRON without FRONTEND_URL does not register the job', async () => {
+test('SYNC_CRON alone registers integration_sync (no FRONTEND_URL/SYNC_SECRET needed as of #487 Phase 2)', async () => {
 	const pb = await startPB({
 		SYNC_CRON: '*/30 * * * *',
-		FRONTEND_URL: '', // deliberately incomplete — syncTargetConfigured must veto
-		SYNC_SECRET: 'test-sync-secret',
-		// REFRESH_CRON unset — that job must not be registered either.
+		// No FRONTEND_URL / SYNC_SECRET, no REFRESH_CRON: the sync job now runs locally and needs
+		// neither; the refresh job must stay unregistered (REFRESH_CRON unset).
 	})
 	try {
 		const ids = await registeredCronIds()
-		assert.ok(!ids.includes('integration_sync'), 'integration_sync must not be registered without FRONTEND_URL')
+		assert.ok(ids.includes('integration_sync'), `integration_sync must register on SYNC_CRON alone (got ${ids})`)
 		assert.ok(!ids.includes('integration_refresh'), 'integration_refresh must not be registered without REFRESH_CRON')
 	} finally {
 		stopPB(pb)

@@ -52,4 +52,32 @@ function errorMessage(err) {
     return String(err)
 }
 
-module.exports = { SYNCED_FIELDS, makeSummary, errorMessage }
+/**
+ * Logs one per-institution summary line — COUNTS ONLY, never item content or user PII. Shared by
+ * the refresh (`[cron:refresh]`) and sync (`[cron:sync]`) cron entrypoints so the format stays
+ * identical. Errors bump the line to error level and attach the error list as structured data.
+ *
+ * @param {any} app - `$app`.
+ * @param {string} prefix - log prefix, e.g. `'[cron:sync]'`.
+ * @param {object} summary - a SyncSummary.
+ */
+function logIntegrationSummary(app, prefix, summary) {
+    const line =
+        prefix +
+        ' ' +
+        summary.institution +
+        ': fetched=' + summary.fetched +
+        ' created=' + summary.created +
+        ' updated=' + summary.updated +
+        ' archived=' + summary.archived +
+        ' skipped=' + summary.skipped +
+        ' errors=' + summary.errors.length +
+        ' (' + summary.durationMs + 'ms)'
+    if (summary.errors.length > 0) {
+        app.logger().error(line, 'errors', JSON.stringify(summary.errors))
+    } else {
+        app.logger().info(line)
+    }
+}
+
+module.exports = { SYNCED_FIELDS, makeSummary, errorMessage, logIntegrationSummary }
