@@ -23,3 +23,6 @@ node_modules/
 .idea/
 .zed/
 pocketbase.exe
+
+# Personal local overrides (see CLAUDE.md)
+CLAUDE.local.md
