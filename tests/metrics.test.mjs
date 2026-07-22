@@ -248,3 +248,60 @@ test('users.isAdmin is invisible via the API and cannot be self-set', async () =
 	assert.equal(suView.status, 200)
 	assert.equal(suView.json.isAdmin, true, 'superuser requests see hidden fields')
 })
+
+test('acceptedAt/completedAt cannot be forged on create (no real transition ever happened)', async () => {
+	const owner = await makeUser('mtscreate1')
+	const requester = await makeUser('mtscreatereq1')
+	const item = await createItem(owner.t, owner.id)
+
+	// A normal pending create that also smuggles forged timestamps. onRecordUpdate never
+	// fires on create, so the create-path guard is what has to discard these.
+	const created = await api('POST', '/api/collections/conversations/records', requester.t, {
+		requester: requester.id,
+		itemOwner: owner.id,
+		requestedItem: item,
+		lendingStatus: 'pending',
+		acceptedAt: '2000-01-01 00:00:00.000Z',
+		completedAt: '2000-01-01 00:00:00.000Z',
+	})
+	assert.equal(created.status, 200, JSON.stringify(created.json))
+	assert.equal(created.json.acceptedAt, '', 'forged acceptedAt on create is discarded')
+	assert.equal(created.json.completedAt, '', 'forged completedAt on create is discarded')
+})
+
+test('a non-superuser cannot create a conversation already in a terminal state', async () => {
+	const owner = await makeUser('mtscreate2')
+	const requester = await makeUser('mtscreatereq2')
+	const item = await createItem(owner.t, owner.id)
+
+	// Attempt to seed a fake completed loan (would inflate loans.completed + the public
+	// loansCompleted / impact numbers) straight from a direct API POST.
+	const created = await api('POST', '/api/collections/conversations/records', requester.t, {
+		requester: requester.id,
+		itemOwner: owner.id,
+		requestedItem: item,
+		lendingStatus: 'completed',
+		counterfactual: 'would_buy',
+		completedAt: '2000-01-01 00:00:00.000Z',
+	})
+	assert.equal(created.status, 200, JSON.stringify(created.json))
+	assert.equal(created.json.lendingStatus, 'pending', 'a non-superuser create is forced back to pending')
+	assert.equal(created.json.completedAt, '', 'no completedAt is stamped for the forced-pending create')
+	assert.equal(created.json.acceptedAt, '', 'no acceptedAt either')
+})
+
+test('a superuser may still create a conversation in a terminal state (seed/admin path)', async () => {
+	const owner = await makeUser('mtscreate3')
+	const requester = await makeUser('mtscreatereq3')
+	const item = await createItem(owner.t, owner.id)
+
+	const created = await api('POST', '/api/collections/conversations/records', adminAuth(), {
+		requester: requester.id,
+		itemOwner: owner.id,
+		requestedItem: item,
+		lendingStatus: 'completed',
+	})
+	assert.equal(created.status, 200, JSON.stringify(created.json))
+	assert.equal(created.json.lendingStatus, 'completed', 'superuser create keeps the requested status')
+	assert.ok(created.json.completedAt, 'completedAt is stamped for a superuser create-in-completed')
+})
