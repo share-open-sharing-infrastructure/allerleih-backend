@@ -10,7 +10,7 @@
  * Filters use `{:param}` placeholders exclusively — never string interpolation.
  */
 
-const { SYNCED_FIELDS } = require(`${__hooks}/integrations/types.js`)
+const { SYNCED_FIELDS, errorMessage } = require(`${__hooks}/integrations/types.js`)
 const { archiveDescription } = require(`${__hooks}/integrations/diff.js`)
 
 /** Records per page when loading an institution's stored items. */
@@ -47,7 +47,7 @@ function loadExistingItems(app, ownerId) {
         const batch = app.findRecordsByFilter(
             'items',
             'owner = {:owner} && externalId != ""',
-            '',
+            'id', // explicit stable sort — offset paging without one may skip/repeat rows
             PAGE,
             offset,
             { owner: ownerId }
@@ -87,6 +87,30 @@ function findSyncInstitutions(app, institutionId) {
 }
 
 /**
+ * Saves one record, naming the offending item if the write fails.
+ *
+ * Worth the wrapper because the transaction is all-or-nothing: a single record the source can't
+ * satisfy (say a feed entry violating a field rule) rolls the whole institution back and keeps
+ * doing so on every run. The bare PocketBase message ("name: cannot be blank") would leave ops
+ * guessing WHICH of hundreds of records is the poison pill. `externalId` is a catalogue
+ * identifier, not personal data — the counts-only rule for summary logs is unaffected.
+ *
+ * @param {any} txApp - the transaction app.
+ * @param {any} record - the record to save.
+ * @param {string} phase - `'update'` / `'create'` / `'archive'`, for the message.
+ * @param {string} externalId - the item's source id.
+ */
+function saveOrThrowWithContext(txApp, record, phase, externalId) {
+    try {
+        txApp.save(record)
+    } catch (err) {
+        throw new Error(
+            phase + ' failed for externalId "' + (externalId || '') + '": ' + errorMessage(err)
+        )
+    }
+}
+
+/**
  * Applies a `DiffResult` via direct record writes: updates, then creates, then archives.
  * MUST run inside `app.runInTransaction` — a failed write throws and rolls the whole
  * institution back (all-or-nothing), instead of the TS's "failed batch recorded" behavior.
@@ -111,7 +135,7 @@ function applyDiff(txApp, diff) {
         for (let f = 0; f < SYNCED_FIELDS.length; f++) {
             record.set(SYNCED_FIELDS[f], entry.data[SYNCED_FIELDS[f]])
         }
-        txApp.save(record)
+        saveOrThrowWithContext(txApp, record, 'update', entry.data.externalId)
         updated += 1
     }
 
@@ -124,7 +148,7 @@ function applyDiff(txApp, diff) {
         record.set('externalId', item.externalId)
         record.set('owner', item.owner)
         record.set('trusteesOnly', item.trusteesOnly)
-        txApp.save(record)
+        saveOrThrowWithContext(txApp, record, 'create', item.externalId)
         created += 1
     }
 
@@ -133,7 +157,7 @@ function applyDiff(txApp, diff) {
         const record = txApp.findRecordById('items', existing.id)
         record.set('status', 'unavailable')
         record.set('description', archiveDescription(existing.description))
-        txApp.save(record)
+        saveOrThrowWithContext(txApp, record, 'archive', existing.externalId)
         archived += 1
     }
 

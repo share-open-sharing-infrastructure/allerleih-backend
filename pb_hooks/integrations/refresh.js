@@ -12,6 +12,7 @@
 const { makeSummary, errorMessage } = require(`${__hooks}/integrations/types.js`)
 const { diffItems } = require(`${__hooks}/integrations/diff.js`)
 const { loadExistingItems, findSyncInstitutions, applyDiff } = require(`${__hooks}/integrations/db.js`)
+const { acquireRunLock, releaseRunLock } = require(`${__hooks}/integrations/lock.js`)
 const { winbiapRefreshIntegration } = require(`${__hooks}/integrations/winbiap.js`)
 const { leihbackendRefreshIntegration } = require(`${__hooks}/integrations/leihbackend.js`)
 
@@ -26,8 +27,9 @@ const REFRESH_ABORT_RATE = 0.5
 
 /**
  * Ordered refresh registry. More specific integrations come FIRST; leihbackend is the catch-all
- * (`claimsItem: () => true`) and stays LAST — otherwise it would grab, and wrongly archive,
- * WINBIAP items (which 404 against `item_public`). Order is security-relevant.
+ * (it claims every item that is not visibly from another source) and stays LAST — otherwise it
+ * would grab, and wrongly archive, WINBIAP items (which 404 against `item_public`). Order is
+ * security-relevant.
  */
 function getRefreshIntegrations() {
     return [winbiapRefreshIntegration, leihbackendRefreshIntegration]
@@ -41,7 +43,8 @@ function getRefreshIntegrations() {
  *  - `error` items (transient failures) are left untouched and count toward the circuit-breaker.
  *
  * Aborts with zero writes if the DB load fails, or if the combined transient-error + gone rate
- * reaches `REFRESH_ABORT_RATE`. Writes run inside a single transaction (all-or-nothing).
+ * among the CLAIMED items reaches `REFRESH_ABORT_RATE`. Items no integration claims are left
+ * untouched and stay out of that rate. Writes run inside a single transaction (all-or-nothing).
  *
  * @param {any} app - `$app`.
  * @param {object} institution - the institution whose stored items are refreshed.
@@ -58,6 +61,11 @@ function refreshInstitution(app, institution, integrations) {
         const fetched = []
         const resolved = [] // items with a definitive answer (found or gone)
         let goneCount = 0
+        // Items an integration actually took responsibility for — the circuit-breaker's
+        // denominator. Stored items from a different source are skipped below and must NOT
+        // dilute the rate (they can never be "suspicious", so counting them would only make an
+        // outage look harmless).
+        let claimedCount = 0
 
         // Narrow to the integrations serving this institution's source before item routing, so a
         // catch-all claimsItem can't grab (and archive) another source's items.
@@ -75,6 +83,7 @@ function refreshInstitution(app, institution, integrations) {
                 }
             }
             if (!integration) continue // no integration owns this item — leave it untouched
+            claimedCount += 1
 
             let outcome
             try {
@@ -102,14 +111,15 @@ function refreshInstitution(app, institution, integrations) {
 
         // Circuit-breaker: a likely outage — abort without archiving. "Gone" answers count too:
         // a collection-level 404 or an empty-but-well-formed source response reports every item as
-        // gone, which must not be mistaken for a genuine mass-removal.
+        // gone, which must not be mistaken for a genuine mass-removal. The rate is measured against
+        // the CLAIMED items (not every stored one), so unrelated items can't dilute it.
         const suspicious = summary.errors.length + goneCount
-        if (existingItems.length > 0 && suspicious / existingItems.length >= REFRESH_ABORT_RATE) {
+        if (claimedCount > 0 && suspicious / claimedCount >= REFRESH_ABORT_RATE) {
             summary.errors.unshift(
                 'Aborted: ' +
                     suspicious +
                     '/' +
-                    existingItems.length +
+                    claimedCount +
                     ' item fetches were suspicious (' +
                     summary.errors.length +
                     ' transient errors, ' +
@@ -186,16 +196,10 @@ function runRefresh(institutionId) {
         return
     }
 
-    // Atomic acquire: getOrSet runs the setter ONLY when the key is absent, all under the store's
-    // internal lock. This closes the TOCTOU window a separate get()+set() had — two back-to-back
-    // triggers (a manual POST /api/crons racing a scheduled tick) can no longer both pass the
-    // guard. The winner's token is stored; every loser reads it back (!== its own token) and skips.
-    // (setFunc-with-throw would work too, but getOrSet avoids relying on a JS exception propagating
-    // out of a Go callback.) Key shared with the future backend sync port — both write `items`.
-    const store = $app.store()
-    const token = `refresh:${Date.now()}:${Math.random()}`
-    if (store.getOrSet('integrationRunLock', () => token) !== token) {
-        $app.logger().warn('[cron:refresh] previous run still active — skipping')
+    // Shared with every other integration writer (see integrations/lock.js for the atomicity
+    // rationale): the future backend sync port and the Phase-3 CSV-import routes all write `items`.
+    if (!acquireRunLock($app, 'refresh')) {
+        $app.logger().warn('[cron:refresh] another integration run is active — skipping')
         return
     }
 
@@ -221,7 +225,7 @@ function runRefresh(institutionId) {
         }
     } finally {
         // Only the lock holder reaches here — release it (never leak the lock on an exception).
-        store.remove('integrationRunLock')
+        releaseRunLock($app)
     }
 }
 

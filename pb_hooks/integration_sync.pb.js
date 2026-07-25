@@ -35,7 +35,10 @@ function isValidCron(expr) {
         const [min, max] = bounds[i]
         return field.split(',').every((part) => {
             const segments = part.split('/')
-            if (segments.length > 2 || (segments[1] !== undefined && !/^\d+$/.test(segments[1]))) return false
+            // A step must be a POSITIVE integer — `*/0` parses as digits but makes the Go
+            // scheduler error out, i.e. exactly the panic this validation exists to prevent.
+            if (segments.length > 2) return false
+            if (segments[1] !== undefined && (!/^\d+$/.test(segments[1]) || +segments[1] === 0)) return false
             if (segments[0] === '*') return true
             const range = segments[0].split('-')
             if (range.length > 2) return false

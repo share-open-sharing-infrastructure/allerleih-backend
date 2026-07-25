@@ -442,3 +442,98 @@ test('8. diff edge cases: unchanged, category reorder, and already-archived all 
         closeStub(stub)
     }
 })
+
+test('9. routing safety WITHIN one institution: a WINBIAP-shaped item is never claimed by the catch-all', async () => {
+    // A leihbackend institution may also hold items from another source — CSV-imported WebOPAC
+    // records, or (from Phase 2 on) a second `winbiap` sync config. Those items are not in this
+    // institution's item_public feed, so the catch-all must leave them alone instead of 404-ing
+    // and archiving them. Test 4 covers the same guard across institutions; this is the harder,
+    // same-owner case, kept below the circuit-breaker (1 of 4) so only routing can save the item.
+    const lb = await startStub(leihbackendHandler({
+        'lb-a': lbRecord({ id: 'lb-a', name: 'A', status: 'instock', category: ['sonstige'] }),
+        'lb-b': lbRecord({ id: 'lb-b', name: 'B', status: 'instock', category: ['sonstige'] }),
+        'lb-c': lbRecord({ id: 'lb-c', name: 'C', status: 'instock', category: ['sonstige'] }),
+    }))
+    const pb = await startPB({ REFRESH_CRON, INTEGRATION_ALLOW_INSECURE_URL: 'true' })
+    try {
+        const inst = await seedInstitution({ username: 'mixedsource', leihbackendUrl: stubUrl(lb), city: 'Stadt' })
+        const feedItems = []
+        for (const external of ['lb-a', 'lb-b', 'lb-c']) {
+            feedItems.push(await seedItem({
+                name: 'Alt', owner: inst.id, externalId: external, status: 'unavailable',
+                categories: ['Sonstiges'], description: 'alt', place: 'Stadt',
+            }))
+        }
+        const winbiapShaped = await seedItem({
+            name: 'WebOPAC Buch', owner: inst.id, externalId: '118$5031208P', status: 'available',
+            categories: ['Bücher'], description: 'Buch', place: 'Stadt',
+            externalUrl: 'https://rblg.example.org/webopac/detail/5031208',
+        })
+
+        await triggerRefresh()
+        const summary = await waitSummary(inst.username)
+        assert.ok(summary, 'a summary must be logged')
+        assert.equal(summary.fetched, 3, 'only the three feed items are fetched')
+        assert.equal(summary.archived, 0, 'the foreign-source item must NOT be archived')
+
+        const foreign = await getItem(winbiapShaped)
+        assert.equal(foreign.status, 'available', 'foreign-source item status untouched')
+        assert.equal(foreign.description, 'Buch', 'foreign-source item description untouched')
+        assert.ok(await pollItem(feedItems[0], (r) => r.status === 'available'), 'feed items still refresh')
+    } finally {
+        stopPB(pb)
+        closeStub(lb)
+    }
+})
+
+test('10. circuit-breaker rate counts only CLAIMED items, so foreign items cannot dilute it', async () => {
+    // One claimed item, and it is gone => 1/1 = 100% suspicious => abort with zero writes. Three
+    // unclaimed items must not turn that into 1/4 = 25% and wave the archive through.
+    const lb = await startStub(leihbackendHandler({})) // every lookup 404s => "gone"
+    const pb = await startPB({ REFRESH_CRON, INTEGRATION_ALLOW_INSECURE_URL: 'true' })
+    try {
+        const inst = await seedInstitution({ username: 'dilution', leihbackendUrl: stubUrl(lb), city: 'Stadt' })
+        const claimed = await seedItem({
+            name: 'Weg?', owner: inst.id, externalId: 'lb-gone', status: 'available',
+            categories: ['Sonstiges'], description: 'da', place: 'Stadt',
+        })
+        for (const barcode of ['118$1', '118$2', '118$3']) {
+            await seedItem({
+                name: 'Buch', owner: inst.id, externalId: barcode, status: 'available',
+                categories: ['Bücher'], description: 'Buch', place: 'Stadt',
+            })
+        }
+
+        await triggerRefresh()
+        const summary = await waitSummary(inst.username)
+        assert.ok(summary, 'a summary must be logged')
+        assert.equal(summary.archived, 0, 'the breaker must abort before archiving')
+        assert.ok(
+            JSON.stringify(summary.data || {}).includes('Aborted: 1/1'),
+            `the abort must be measured against the claimed items: ${JSON.stringify(summary.data)}`
+        )
+        const untouched = await getItem(claimed)
+        assert.equal(untouched.status, 'available', 'the gone item stays untouched on abort')
+        assert.ok(!untouched.description.startsWith(DESCRIPTION_PREFIX), 'nothing archived')
+    } finally {
+        stopPB(pb)
+        closeStub(lb)
+    }
+})
+
+test('11. a zero step (*/0) is rejected like any other invalid expression (cronAdd would panic)', async () => {
+    const pb = await startPB({
+        REFRESH_CRON: '*/0 * * * *',
+        SYNC_CRON: '*/30 * * * *',
+        FRONTEND_URL: 'http://127.0.0.1:9', // registration only; never called (as in test 6)
+        SYNC_SECRET: 'test-sync-secret',
+    })
+    try {
+        const res = await api('GET', '/api/crons', adminAuth())
+        const ids = res.json.map((j) => j.id)
+        assert.ok(!ids.includes('integration_refresh'), `*/0 must not register (got ${ids})`)
+        assert.ok(ids.includes('integration_sync'), `the sibling job must stay registered (got ${ids})`)
+    } finally {
+        stopPB(pb)
+    }
+})

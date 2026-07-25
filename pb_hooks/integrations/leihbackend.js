@@ -11,7 +11,7 @@
 
 const { assertPublicHttpUrl } = require(`${__hooks}/integrations/urlGuard.js`)
 const { INTEGRATION_ALLOW_INSECURE_URL } = require(`${__hooks}/constants.js`)
-const { isWinbiapInstitution } = require(`${__hooks}/integrations/winbiap.js`)
+const { isWinbiapInstitution, isWinbiapItem } = require(`${__hooks}/integrations/winbiap.js`)
 
 const TIMEOUT_SECONDS = 15
 
@@ -189,14 +189,21 @@ function refreshOne(institution, item) {
 }
 
 /**
- * Refresh integration for leihbackend. Within a leihbackend institution it claims every item
- * (catch-all) — but never items of a WINBIAP institution, where a catch-all would 404 against
- * `item_public` and wrongly archive them. Registered LAST (see refresh.js).
+ * Refresh integration for leihbackend: the catch-all, registered LAST (see refresh.js).
+ *
+ * It claims every item of a leihbackend institution EXCEPT those that visibly come from another
+ * source. Both exclusions are load-bearing, at two different levels:
+ *  - `claimsInstitution` keeps it away from a WINBIAP institution's items entirely, and
+ *  - `claimsItem` keeps it away from WINBIAP-shaped items *inside* a leihbackend institution —
+ *    a barcode `externalId` or a `/webopac/` deep link is not in this institution's `item_public`
+ *    feed, so a true catch-all would 404 on it and wrongly archive it. That case is real: an
+ *    institution may hold CSV-imported items alongside its feed, and (since Phase 2's
+ *    `sync_config`) may even have a `leihbackend` AND a `winbiap` config at the same time.
  */
 const leihbackendRefreshIntegration = {
     id: 'leihbackend',
     claimsInstitution: (institution) => !isWinbiapInstitution(institution),
-    claimsItem: () => true,
+    claimsItem: (item) => !isWinbiapItem(item),
     fetchOne: refreshOne,
 }
 
