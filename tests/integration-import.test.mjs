@@ -311,3 +311,57 @@ test('13. refresh refreshes the caller\'s own items only (not others)', async ()
         win.close(); win.closeAllConnections()
     }
 })
+
+test('14. more rows than the cap is a hard 400 (the frontend limit is not the only one)', async () => {
+    const pb = await startPB()
+    try {
+        const inst = await mkUser(true)
+        const rows = []
+        for (let i = 0; i < 5001; i++) rows.push(rowOf({ externalId: `cap-${i}` }))
+        const res = await apply(inst.token, rows)
+        assert.equal(res.status, 400, `over-cap apply must be 400 (got ${res.status})`)
+        assert.match(res.json.message || '', /Too many rows/, JSON.stringify(res.json))
+        assert.equal(await countItems(inst.id), 0, 'nothing written on a rejected payload')
+    } finally { stopPB(pb) }
+})
+
+test('15. a writing import loses to a running cron with 409 instead of writing concurrently', async () => {
+    // A WebOPAC stub that accepts the connection and never answers: the refresh cron then sits in
+    // $http.send (10 s timeout) holding the shared lock, which is exactly the window an institution
+    // could otherwise write into.
+    const hanging = createServer(() => {})
+    await new Promise((r) => hanging.listen(0, '127.0.0.1', r))
+    const stubUrl = `http://127.0.0.1:${hanging.address().port}/webopac`
+    const pb = await startPB({ REFRESH_CRON: '*/15 * * * *', INTEGRATION_ALLOW_INSECURE_URL: 'true' })
+    try {
+        const inst = await mkUser(true, 'busyinst')
+        const cfg = await api('POST', '/api/collections/sync_config/records', adminAuth(), {
+            institution: inst.id, integration: 'winbiap', baseUrl: stubUrl, enabled: true,
+        })
+        assert.equal(cfg.status, 200, JSON.stringify(cfg.json))
+        await seedItem({
+            name: 'Buch', owner: inst.id, externalId: '118$5031208P', status: 'unknown',
+            categories: ['Bücher'], description: 'b', place: 'B',
+        })
+
+        const run = await api('POST', '/api/crons/integration_refresh', adminAuth())
+        assert.equal(run.status, 204, 'triggering integration_refresh must return 204')
+
+        // The job runs in the background; poll until it holds the lock (it will, well within the
+        // stub's 10 s hang) and assert the import is refused rather than run in parallel.
+        let refused = null
+        for (let i = 0; i < 25 && !refused; i++) {
+            const res = await apply(inst.token, [rowOf({ externalId: 'while-locked' })])
+            if (res.status === 409) refused = res
+            else await sleep(200)
+        }
+        assert.ok(refused, 'a writing import during a cron run must be refused with 409')
+        assert.match(refused.json.message || '', /currently active/, JSON.stringify(refused.json))
+
+        const refreshDenied = await api('POST', '/api/import/refresh', inst.token, {})
+        assert.equal(refreshDenied.status, 409, 'the on-demand refresh is serialised the same way')
+    } finally {
+        stopPB(pb)
+        hanging.close(); hanging.closeAllConnections()
+    }
+})

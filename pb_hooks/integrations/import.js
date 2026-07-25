@@ -17,6 +17,18 @@ const { makeSummary, errorMessage } = require(`${__hooks}/integrations/types.js`
 const { diffItems } = require(`${__hooks}/integrations/diff.js`)
 const { loadExistingItems, applyDiff, findSyncConfigs } = require(`${__hooks}/integrations/db.js`)
 const { getRefreshIntegrations, refreshInstitution } = require(`${__hooks}/integrations/refresh.js`)
+const { acquireRunLock, releaseRunLock } = require(`${__hooks}/integrations/lock.js`)
+
+/**
+ * Upper bound on rows per request, mirroring the frontend parser's MAX_ROWS. The endpoint is
+ * reachable by any institutional account, so the limit has to live HERE too — the frontend's
+ * 5 000-row / 1 MB check only bounds the polite path, not a hand-rolled POST.
+ */
+const MAX_IMPORT_ROWS = 5000
+
+/** 409 body for a writing import step that lost the race for the shared lock (see withRunLock). */
+const BUSY_MESSAGE =
+    'Another integration run (sync, refresh or import) is currently active. Please try again in a few minutes.'
 
 /**
  * Validates the payload, stamps `owner = ownerId` on every row, and dedupes by `externalId`
@@ -24,11 +36,18 @@ const { getRefreshIntegrations, refreshInstitution } = require(`${__hooks}/integ
  * externalId in one upload would otherwise create two rows). Owner from the payload is discarded.
  *
  * @returns {{ok: true, rows: Array}} on success, or {{ok: false, message: string}} for a 400
- *   (rows not an array, or a row missing a non-empty externalId — Q3 hard fail, defense-in-depth).
+ *   (rows not an array, too many rows, or a row missing a non-empty externalId — Q3 hard fail,
+ *   defense-in-depth).
  */
 function prepareRows(rows, ownerId) {
     if (!Array.isArray(rows)) {
         return { ok: false, message: 'Request body must contain a "rows" array.' }
+    }
+    if (rows.length > MAX_IMPORT_ROWS) {
+        return {
+            ok: false,
+            message: 'Too many rows: ' + rows.length + ' (max ' + MAX_IMPORT_ROWS + ' per request).',
+        }
     }
     const byExternalId = Object.create(null)
     const order = [] // first-appearance order (object key order is unreliable for numeric-looking ids)
@@ -122,17 +141,23 @@ function previewImport(app, ownerId, preparedRows) {
  * Refreshes ONLY the authenticated institution's own items (replaces the old frontend
  * `/api/refresh?institution=` call). Reuses the cron refresh port unchanged: discover the caller's
  * own `sync_config` rows and run `refreshInstitution` for each; aggregate into one SyncSummary.
- * Each config only claims its own item type (via `claimsInstitution`), so multiple configs don't
- * double-process an item.
- * @returns {object} a SyncSummary.
+ * Each config only claims its own items (`claimsInstitution` at institution level, `claimsItem` at
+ * item level), so multiple configs never double-process or cross-archive an item.
+ *
+ * `configured: false` means the institution has no `sync_config` row at all — there is nothing this
+ * button can do, and the caller must say so instead of reporting a successful no-op.
+ *
+ * @returns {object} a SyncSummary plus `configured`.
  */
 function refreshOwn(app, ownerId, username) {
     const summary = makeSummary(username)
+    summary.configured = false
     const startTime = Date.now()
     try {
         // Discovery can throw (bad filter/DB) — keep the module's "always returns a summary"
         // contract (mirrors runRefresh, which also catches discovery failures).
         const institutions = findSyncConfigs(app, { institutionId: ownerId })
+        summary.configured = institutions.length > 0
         const integrations = getRefreshIntegrations()
         for (let i = 0; i < institutions.length; i++) {
             const s = refreshInstitution(app, institutions[i], integrations)
@@ -151,4 +176,26 @@ function refreshOwn(app, ownerId, username) {
     return summary
 }
 
-module.exports = { prepareRows, applyImport, previewImport, refreshOwn }
+/**
+ * Runs a WRITING import step under the integration-wide overlap lock (`integrations/lock.js`) —
+ * the same lock the sync/refresh crons hold. Without it a cron sync could compute its diff while
+ * an apply is writing and then archive the freshly created items, two concurrent applies could
+ * create the same `externalId` twice (no unique index), and a double-clicked refresh button would
+ * fire N parallel WebOPAC crawls.
+ *
+ * Preview needs no lock: it writes nothing and is explicitly a forecast, not a guarantee.
+ *
+ * @param {any} app - `$app`.
+ * @param {() => object} run - the write step; its return value is passed through.
+ * @returns {object|null} whatever `run` returned, or `null` when another run holds the lock.
+ */
+function withRunLock(app, run) {
+    if (!acquireRunLock(app, 'import')) return null
+    try {
+        return run()
+    } finally {
+        releaseRunLock(app)
+    }
+}
+
+module.exports = { prepareRows, applyImport, previewImport, refreshOwn, withRunLock, MAX_IMPORT_ROWS, BUSY_MESSAGE }
