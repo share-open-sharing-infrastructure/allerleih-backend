@@ -2,8 +2,8 @@
 
 /**
  * Full-catalogue pull orchestration (#487 Phase 2). Goja port of share-mvp `core/sync.ts`.
- * Runs entirely in the backend: native `$app`, per-institution transaction, shared `$app.store()`
- * overlap lock — no HTTP POST to the frontend, no superuser client, no batching/retry.
+ * Runs entirely in the backend: native `$app`, per-institution transaction, the shared overlap lock
+ * from `integrations/lock.js` — no HTTP POST to the frontend, no superuser client, no batching.
  *
  * `runSync()` is the cron entrypoint (see integration_sync.pb.js). The Create path in
  * `db.js applyDiff` (built in Phase 1 but never triggered by the refresh diff) fires here for the
@@ -13,6 +13,7 @@
 const { makeSummary, errorMessage, logIntegrationSummary } = require(`${__hooks}/integrations/types.js`)
 const { diffItems } = require(`${__hooks}/integrations/diff.js`)
 const { loadExistingItems, findSyncConfigs, applyDiff } = require(`${__hooks}/integrations/db.js`)
+const { acquireRunLock, releaseRunLock } = require(`${__hooks}/integrations/lock.js`)
 const { leihbackendPullIntegration } = require(`${__hooks}/integrations/leihbackend.js`)
 
 /**
@@ -66,20 +67,28 @@ function archiveGuardError(fetchedCount, toArchiveCount, existingCount) {
  * Aborts with zero writes if `fetchAndMap` or the DB load throws. Skips ONLY the archive phase
  * (recording an error, creates/updates still applied) when `archiveGuardError` fires.
  *
+ * The stored items are narrowed to the ones this integration claims. An institution may hold items
+ * from another source too — CSV-imported WebOPAC records, or a second `sync_config` row — and those
+ * never appear in this feed, so diffing against them would archive them wholesale (and, worse,
+ * would look like a legitimate catalogue shrink to the archive guard).
+ *
  * @param {any} app - `$app`.
  * @param {object} institution - a `sync_config`-derived institution.
- * @param {(institution: object) => Array} fetchAndMap - integration's fetch+map callback.
+ * @param {{fetchAndMap: Function, claimsItem?: Function}} integration - the pull integration.
  * @returns {object} a SyncSummary.
  */
-function syncInstitution(app, institution, fetchAndMap) {
+function syncInstitution(app, institution, integration) {
     const startTime = Date.now()
     const summary = makeSummary(institution.username)
 
     try {
-        const mappedItems = fetchAndMap(institution)
+        const mappedItems = integration.fetchAndMap(institution)
         summary.fetched = mappedItems.length
 
-        const existingItems = loadExistingItems(app, institution.id)
+        const stored = loadExistingItems(app, institution.id)
+        const existingItems = integration.claimsItem
+            ? stored.filter((item) => integration.claimsItem(item))
+            : stored
 
         const diff = diffItems(mappedItems, existingItems)
         summary.skipped = diff.skipped
@@ -111,8 +120,8 @@ function syncInstitution(app, institution, fetchAndMap) {
 
 /**
  * Cron entrypoint: full-pulls every enabled pull-integration institution locally. Guarded by the
- * SAME `$app.store()` overlap lock as the refresh (`integrationRunLock`) — both write `items`, so
- * a sync and a refresh never run concurrently. `DRY_MODE` logs and skips all fetches + writes.
+ * SAME overlap lock as the refresh (`integrations/lock.js`) — both write `items`, so a sync and a
+ * refresh never run concurrently. `DRY_MODE` logs and skips all fetches + writes.
  *
  * @param {string} [institutionId] - optional: sync only this institution (else all).
  */
@@ -124,11 +133,9 @@ function runSync(institutionId) {
         return
     }
 
-    // Atomic acquire, shared with refresh (see refresh.js for the TOCTOU rationale).
-    const store = $app.store()
-    const token = `sync:${Date.now()}:${Math.random()}`
-    if (store.getOrSet('integrationRunLock', () => token) !== token) {
-        $app.logger().warn('[cron:sync] previous run still active — skipping')
+    // Shared with the refresh and the import routes (see integrations/lock.js).
+    if (!acquireRunLock($app, 'sync')) {
+        $app.logger().warn('[cron:sync] another integration run is active — skipping')
         return
     }
 
@@ -149,7 +156,7 @@ function runSync(institutionId) {
             for (let i = 0; i < institutions.length; i++) {
                 anyInstitution = true
                 // Per-institution failures are isolated inside syncInstitution (summary.errors).
-                logIntegrationSummary($app, '[cron:sync]', syncInstitution($app, institutions[i], integration.fetchAndMap))
+                logIntegrationSummary($app, '[cron:sync]', syncInstitution($app, institutions[i], integration))
             }
         }
         if (!anyInstitution) {
@@ -157,7 +164,7 @@ function runSync(institutionId) {
         }
     } finally {
         // Only the lock holder reaches here — release it (never leak the lock on an exception).
-        store.remove('integrationRunLock')
+        releaseRunLock($app)
     }
 }
 

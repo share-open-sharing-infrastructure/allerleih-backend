@@ -464,3 +464,38 @@ test('12. SSRF guard: an http:// baseUrl without the insecure flag fails with ze
         closeStub(stub)
     }
 })
+
+test('13. foreign-source items of the same institution are not part of the pull diff', async () => {
+    // An institution may hold CSV-imported WebOPAC items next to its leihbackend feed (and may even
+    // carry a second `winbiap` sync_config). Those items are not in item_public, so an unscoped diff
+    // would archive them — here 1 of 4, i.e. below the archive guard, so only the per-integration
+    // item scoping can save them.
+    const stub = await startStub(bulkFeedHandler([
+        lbRecord({ id: 'f-1', name: 'Feed 1' }),
+        lbRecord({ id: 'f-2', name: 'Feed 2' }),
+        lbRecord({ id: 'f-3', name: 'Feed 3' }),
+    ]))
+    const pb = await startPB({ SYNC_CRON, INTEGRATION_ALLOW_INSECURE_URL: 'true' })
+    try {
+        const inst = await seedInstitution({ username: 'mixedpull', baseUrl: stubUrl(stub), city: 'Stadt' })
+        const foreign = await seedItem({
+            name: 'WebOPAC Buch', owner: inst.id, externalId: '118$5031208P', status: 'available',
+            categories: ['Bücher'], description: 'Buch', place: 'Stadt',
+            externalUrl: 'https://rblg.example.org/webopac/detail/5031208',
+        })
+
+        await triggerSync()
+        const summary = await waitSummary(inst.username)
+        assert.ok(summary, 'a summary must be logged')
+        assert.equal(summary.created, 3, 'the three feed records are created')
+        assert.equal(summary.archived, 0, 'the foreign-source item must NOT be archived')
+        assert.equal(summary.errors, 0, 'and the archive guard must not fire either')
+
+        const untouched = await getItem(foreign)
+        assert.equal(untouched.status, 'available', 'foreign-source item status untouched')
+        assert.equal(untouched.description, 'Buch', 'foreign-source item description untouched')
+    } finally {
+        stopPB(pb)
+        closeStub(stub)
+    }
+})

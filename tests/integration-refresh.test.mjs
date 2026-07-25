@@ -91,7 +91,6 @@ let instSeq = 0
  * Seeds an institution user AND (as of #487 Phase 2) its `sync_config` row — the backend cron
  * discovers institutions from `sync_config`, not `users.leihbackendUrl`. Integration is derived
  * from the URL (`/webopac` → winbiap, else leihbackend), mirroring the backfill's `isWinbiapUrl`.
- * `users.leihbackendUrl` is still seeded (dual-truth interim; the frontend manual path uses it).
  */
 async function seedInstitution(opts) {
     const t = adminAuth()
@@ -547,12 +546,7 @@ test('10. circuit-breaker rate counts only CLAIMED items, so foreign items canno
 })
 
 test('11. a zero step (*/0) is rejected like any other invalid expression (cronAdd would panic)', async () => {
-    const pb = await startPB({
-        REFRESH_CRON: '*/0 * * * *',
-        SYNC_CRON: '*/30 * * * *',
-        FRONTEND_URL: 'http://127.0.0.1:9', // registration only; never called (as in test 6)
-        SYNC_SECRET: 'test-sync-secret',
-    })
+    const pb = await startPB({ REFRESH_CRON: '*/0 * * * *', SYNC_CRON: '*/30 * * * *' })
     try {
         const res = await api('GET', '/api/crons', adminAuth())
         const ids = res.json.map((j) => j.id)

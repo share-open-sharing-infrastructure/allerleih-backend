@@ -17,6 +17,9 @@ const { archiveDescription } = require(`${__hooks}/integrations/diff.js`)
 /** Records per page when loading an institution's stored items. */
 const PAGE = 200
 
+/** Hard cap for one discovery read of `sync_config` (see findSyncConfigs). */
+const CONFIG_PAGE = 500
+
 /** Projects a stored `items` record to the plain object the pure diff works on. */
 function recordToExisting(record) {
     return {
@@ -92,8 +95,15 @@ function findSyncConfigs(app, options) {
     // 'id != ""' matches all — used only when includeDisabled and no other filter is given.
     const filter = conditions.length > 0 ? conditions.join(' && ') : 'id != ""'
 
-    // Configs are few (one or two per institution) — one generous page suffices.
-    const configs = app.findRecordsByFilter('sync_config', filter, '', 500, 0, params)
+    // Configs are few (one or two per institution) — one generous page suffices. Never silently:
+    // hitting the cap would drop institutions from the run, so say so out loud.
+    const configs = app.findRecordsByFilter('sync_config', filter, 'id', CONFIG_PAGE, 0, params)
+    if (configs.length === CONFIG_PAGE) {
+        app.logger().warn(
+            '[sync_config] discovery hit its page cap — some institutions may be skipped this run',
+            'cap', CONFIG_PAGE
+        )
+    }
     const out = []
     for (let i = 0; i < configs.length; i++) {
         const cfg = configs[i]

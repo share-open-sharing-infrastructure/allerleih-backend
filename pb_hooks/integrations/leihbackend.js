@@ -296,10 +296,16 @@ function fetchAndMapItems(institution) {
     return mapped
 }
 
-/** Full-pull integration for leihbackend instances (registered in sync.js's getPullIntegrations). */
+/**
+ * Full-pull integration for leihbackend instances (registered in sync.js's getPullIntegrations).
+ * `claimsItem` scopes the diff to the items this feed can actually account for — the same guard the
+ * refresh integration uses, and just as load-bearing here: an institution's CSV-imported WebOPAC
+ * items are not in `item_public`, so an unscoped diff would archive them on the first pull.
+ */
 const leihbackendPullIntegration = {
     id: 'leihbackend',
     fetchAndMap: fetchAndMapItems,
+    claimsItem: (item) => !isWinbiapItem(item),
 }
 
 /**
