@@ -2,136 +2,314 @@
 
 PocketBase backend for [AllerLeih](https://allerleih.org) — the sharing/lending platform.
 
+The companion SvelteKit frontend lives in a separate repo,
+[share-mvp](https://github.com/share-open-sharing-infrastructure/share-mvp), and talks to
+this backend over the PocketBase REST/realtime API. They are independent git repos: a change
+spanning both needs a commit/PR in each.
+
 ## Architecture
 
 This project uses PocketBase's **"Zero-Go, JavaScript Hooks"** approach:
-- No custom Go code required
-- Downloads the official PocketBase binary
+
+- No custom Go code and **no build step** — PocketBase is a single downloaded binary
 - Business logic lives in `pb_hooks/` (auto-loaded JS files)
 - Schema is version-controlled in `pb_migrations/` (auto-applied on start)
+- `pb_data/` is the live SQLite DB + uploads (gitignored; delete it to reset to a clean
+  migrated state)
 
-## Quick Start
+---
 
-### 1. Download PocketBase
+## Getting started
+
+### Prerequisites
+
+| What              | Version / note                                                                                                                                                                                |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **PocketBase**    | The official binary, downloaded in step 2 — **not** committed to the repo. Known-good: **v0.39.4**.                                                                                           |
+| **Node.js**       | **25.2.1** — only needed to run the integration test suite (`npm test`); the server itself doesn't use Node. Match the version the frontend repo's CI pins.                                   |
+| **A POSIX shell** | The test harness spawns `./pocketbase` and the frontend's `scripts/dev-stack.sh` is bash. On **Windows, use WSL** — with a native `pocketbase.exe` the test harness will not find the binary. |
+| **git**           | Any recent version.                                                                                                                                                                           |
+
+There is nothing to `npm install` for the server — `package.json` only carries the test script
+and the Prettier config.
+
+### 1. Clone
+
+Clone this repo next to the frontend, so the frontend's `scripts/dev-stack.sh` finds it at its
+default `../allerleih-backend`:
 
 ```bash
-# macOS (Apple Silicon)
-wget https://github.com/pocketbase/pocketbase/releases/download/v{VERSION}/pocketbase_{VERSION}_darwin_arm64.zip
-unzip pocketbase_{VERSION}_darwin_arm64.zip
-chmod +x pocketbase
-
-# Or Linux (amd64)
-wget https://github.com/pocketbase/pocketbase/releases/download/v{VERSION/pocketbase_{VERSION}_linux_amd64.zip
-unzip pocketbase_{VERSION}_linux_amd64.zip
-chmod +x pocketbase
+git clone https://github.com/share-open-sharing-infrastructure/allerleih-backend.git
+git clone https://github.com/share-open-sharing-infrastructure/share-mvp.git
 ```
 
-### 2. Start PocketBase
+### 2. Download the PocketBase binary
+
+Fetch the latest release into the repo root (the binary is gitignored):
 
 ```bash
-./pocketbase serve
+VERSION=$(curl -s https://api.github.com/repos/pocketbase/pocketbase/releases/latest \
+  | grep -o '"tag_name": *"v[^"]*"' | sed 's/.*"v\(.*\)"/\1/')
+
+# Pick the archive for your platform:
+#   pocketbase_${VERSION}_darwin_arm64.zip   macOS (Apple Silicon)
+#   pocketbase_${VERSION}_darwin_amd64.zip   macOS (Intel)
+#   pocketbase_${VERSION}_linux_amd64.zip    Linux / WSL
+curl -fsSL -o pocketbase.zip \
+  "https://github.com/pocketbase/pocketbase/releases/download/v${VERSION}/pocketbase_${VERSION}_linux_amd64.zip"
+unzip -o pocketbase.zip pocketbase
+chmod +x pocketbase
+./pocketbase --version
 ```
 
-PocketBase will:
+All releases: <https://github.com/pocketbase/pocketbase/releases>. Keep the file named
+`pocketbase` (no extension) — `tests/harness.mjs` and the frontend's `dev-stack.sh` both invoke
+it by that name.
+
+### 3. Start it
+
+```bash
+./pocketbase serve --http=127.0.0.1:8090
+```
+
+On first start PocketBase will:
+
 1. Create `pb_data/` (SQLite database + file uploads)
-2. Apply all migrations from `pb_migrations/`
-3. Load all hooks from `pb_hooks/`
-4. Start the API on http://127.0.0.1:8090
-5. Admin UI available at http://127.0.0.1:8090/_/
+2. Apply every migration in `pb_migrations/`, in filename order
+3. Load every hook in `pb_hooks/`
+4. Serve the API on <http://127.0.0.1:8090> and the admin UI on <http://127.0.0.1:8090/_/>
 
-### 3. Create a superuser
+Migrations re-apply (only the pending ones) on **every** `serve`, so pulling `main` and
+restarting is all it takes to pick up a schema change.
+
+### 4. Create a superuser
 
 ```bash
-./pocketbase superuser upsert YOUR_EMAIL YOUR_PASSWORD
+./pocketbase superuser upsert you@example.com yourpassword
 ```
 
-Or visit the admin UI at `http://127.0.0.1:8090/_/` on first run.
+Or create one through the admin UI at <http://127.0.0.1:8090/_/> on first run. You'll need
+these credentials for the frontend's seed runner and its e2e tests.
 
-### 4. Connect the SvelteKit frontend
+### 5. Connect the frontend
 
-In the frontend repo (`allerleih`), update `.env` to point at the local backend:
+In the `share-mvp` checkout, point `.env` at your local backend — **the trailing slash
+matters**, image URLs are built as `${PUBLIC_PB_URL}api/files/…`:
 
 ```env
 PUBLIC_PB_URL="http://127.0.0.1:8090/"
 ```
 
-Then start the frontend:
+Then start it:
 
 ```bash
-cd ../allerleih
+cd ../share-mvp
+npm ci
 npm run dev
 ```
 
-The frontend will now use your local PocketBase instance. Register a new user through the UI or create test data via the admin dashboard.
+Register a user through the UI, or create test data via the admin dashboard or the frontend's
+seed runner (`npm run seed -- <scenario>`).
+
+> **Faster path:** the frontend's `scripts/dev-stack.sh --seed e2e` starts _this_ backend (on
+> port 8091, against this repo's `pb_data/`), upserts a superuser, seeds deterministic data,
+> and launches the dev server — all in one command. It needs the `pocketbase` binary from
+> step 2 to be present here.
+
+### 6. Local configuration (optional)
+
+The hooks read all configuration from **environment variables** (see the table below) and every
+one of them has a safe default or degrades gracefully — a bare `./pocketbase serve` is a
+perfectly good dev setup. Without them, push notifications, travel times and outbound email
+simply don't work locally.
+
+**PocketBase does not auto-load a `.env` file.** The variables must already be in the
+environment of the `pocketbase serve` process:
+
+```bash
+set -a; source local.env; set +a   # local.env is gitignored
+./pocketbase serve --http=127.0.0.1:8090
+```
+
+Useful values while developing:
+
+```env
+DRY_MODE=true     # suppress outbound email / push side effects
+LOG_LEVEL=1       # 1=DEBUG … 4=ERROR
+```
+
+Real credentials for the external services (OpenRouteService, SMTP, VAPID) are not in the repo
+— request them from kontakt@allerleih.org if you need to exercise those features against real
+providers.
+
+---
+
+## Everyday commands
+
+```bash
+./pocketbase serve --http=127.0.0.1:8090          # start (applies migrations, loads hooks)
+./pocketbase superuser upsert <email> <password>  # create/update an admin
+./pocketbase migrate down 1                       # revert the most recent migration
+./pocketbase migrate collections                  # export the live schema as a snapshot migration
+npm test                                          # integration test suite (see Testing)
+npx prettier --write pb_hooks tests               # format (config lives in package.json)
+```
+
+---
+
+## Testing
+
+Integration tests live in `tests/` and run against a **real, throwaway PocketBase instance** —
+so they exercise the actual migrations, collection rules and JS hooks end-to-end (none of which
+can be unit-tested in isolation). No dependencies: they use Node's built-in test runner
+(`node:test`) and `fetch`.
+
+```bash
+npm test                                    # the whole suite
+node --test tests/groups.test.mjs           # a single file
+```
+
+How it works (`tests/harness.mjs`):
+
+- wipes `pb_test_data/` and starts a fresh instance on port **8091** (your dev instance on 8090
+  is untouched), which auto-applies `pb_migrations/` and loads `pb_hooks/`;
+- creates a superuser, seeds verified test users, and exposes small `api()` / `makeUser()` /
+  `adminAuth()` helpers;
+- tears the instance down and removes `pb_test_data/` afterwards.
+
+Requirements and gotchas:
+
+- The `pocketbase` binary must be in the repo root (the same one used for `serve`), named
+  exactly `pocketbase` — the harness spawns `./pocketbase`.
+- Tests run serially (`--test-concurrency=1`) since each one owns the server and the test port.
+- Port **8091** must be free. The frontend's `dev-stack.sh` also defaults to 8091, so stop it
+  before running the suite (or give it another `PB_PORT`).
+
+The ~29 suites cover groups and invites, the trust/group visibility model and public-view
+masking, cascade-delete behaviour, account deletion + GDPR retention jobs, legal consent,
+lending flows, notifications and mail templates, the integration sync/refresh crons, and the
+canonical item-category list. `tests/categories.test.mjs` in particular asserts the live schema
+against `CANONICAL_CATEGORIES`, so category drift between the two repos fails the suite.
+
+Conventions for adding tests are in `.claude/skills/write-tests`.
+
+---
+
+## Contributing
+
+### Workflow
+
+1. **Pick or open an issue.** Issues for the platform are tracked in the
+   [GitHub Project](https://github.com/orgs/share-open-sharing-infrastructure/projects/2).
+2. **Branch off `main`** using `feat/…`, `fix/…`, `chore/…`, `docs/…`, or `<issue-number>-<slug>`.
+   Never push to `main`.
+3. **Make the change**, following the conventions in [CLAUDE.md](CLAUDE.md) — especially the two
+   that bite newcomers: hook handlers run in **isolated contexts** (`require()` shared code
+   _inside_ the handler, not at the top level), and every query filter uses **placeholders**
+   (`'token = {:t}', { t: token }`), never string interpolation. Area-specific rules live in
+   `.claude/rules/`.
+4. **Run the tests** — this is the actual quality gate:
+
+    ```bash
+    npm test
+    ```
+
+5. **Open a PR against `main`**, describing what changed, why, and what you verified.
+
+### What CI does — and doesn't
+
+`.github/workflows/ci.yml` is a **deploy** workflow: on push to `main` it downloads the latest
+PocketBase release, rsyncs `pb_hooks/`, `pb_migrations/` and `pb_public/` to the Uberspace host,
+rewrites the supervisord service (env vars come from GitHub secrets/variables), restarts
+PocketBase and health-checks it.
+
+**There is no PR-triggered test workflow in this repo** — nothing runs `npm test` for you. Run
+it locally before opening a PR, and if the change touches `pb_migrations/`, confirm it applies
+cleanly against a fresh `pb_data/` and that `down()` reverts it.
+
+Note that merging to `main` deploys to production, and that migrations apply automatically on
+the next start.
+
+### Never commit
+
+`.env` / `local.env`, `pb_data/`, `pb_test_data/`, or the `pocketbase` binary — all gitignored,
+all easy to add back by accident with `git add -A -f`.
+
+---
 
 ## Environment variables
 
-The hooks read configuration from environment variables (centralised in
-[`pb_hooks/constants.js`](pb_hooks/constants.js)). Set them in the environment of
-the `pocketbase serve` process — e.g. `ORS_API_KEY=... ./pocketbase serve` locally,
-or via the service/deployment config in production.
+The hooks read configuration from environment variables, centralised in
+[`pb_hooks/constants.js`](pb_hooks/constants.js). Set them in the environment of the
+`pocketbase serve` process — e.g. `ORS_API_KEY=... ./pocketbase serve` locally, or via the
+service/deployment config in production. The full reference table is in
+[`.claude/rules/config.md`](.claude/rules/config.md); the ones you're most likely to touch:
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `ORS_API_KEY` | **yes, for travel times** | — | OpenRouteService key used by the `/api/travel-times` hook. **Without it travel times silently stop working** (ORS rejects every request); the hook logs an error on each attempt. |
-| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | for Web Push | — | VAPID keypair for push notifications. |
-| `VAPID_SUBJECT` | no | `mailto:allerleih@posteo.de` | VAPID subject (mailto: or https: URI). |
-| `LOG_LEVEL` | no | `4` | Log verbosity: 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR. |
-| `DRY_MODE` | no | `false` | When `true`, suppresses side effects such as outbound email. |
-| `MAIL_THROTTLE_MINUTES` | no | `15` | Max one notification email per recipient within this window. |
+| Variable                                     | Required                  | Default                      | Purpose                                                                                                                                                                           |
+| -------------------------------------------- | ------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ORS_API_KEY`                                | **yes, for travel times** | —                            | OpenRouteService key used by the `/api/travel-times` hook. **Without it travel times silently stop working** (ORS rejects every request); the hook logs an error on each attempt. |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`     | for Web Push              | —                            | VAPID keypair for push notifications.                                                                                                                                             |
+| `VAPID_SUBJECT`                              | no                        | `mailto:allerleih@posteo.de` | VAPID subject (mailto: or https: URI).                                                                                                                                            |
+| `LOG_LEVEL`                                  | no                        | `4`                          | Log verbosity: 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR.                                                                                                                                  |
+| `DRY_MODE`                                   | no                        | `false`                      | When `true`, suppresses side effects such as outbound email.                                                                                                                      |
+| `MAIL_THROTTLE_MINUTES`                      | no                        | `15`                         | Max one notification email per recipient within this window.                                                                                                                      |
+| `FRONTEND_URL`                               | for auth mails + sync     | `''`                         | SvelteKit frontend origin (no trailing slash) — the host injected into the `users` auth-mail links and the target of the sync cron.                                               |
+| `SYNC_SECRET` / `SYNC_CRON` / `REFRESH_CRON` | for integrations          | `''`                         | Partner-catalogue sync & refresh jobs. See [`.claude/rules/integration-sync.md`](.claude/rules/integration-sync.md).                                                              |
+| `RETENTION_*`                                | no                        | see `constants.js`           | GDPR retention windows for the nightly purge jobs; `0` disables a job. See [`.claude/rules/retention.md`](.claude/rules/retention.md).                                            |
 
-> **Note:** travel-time computation moved from the frontend into this backend
-> hook, so `ORS_API_KEY` must be present **here** (the frontend still needs its
-> own `ORS_API_KEY` for address autocomplete via `/api/geocode`).
+> **Note:** travel-time computation moved from the frontend into this backend hook, so
+> `ORS_API_KEY` must be present **here** (the frontend still needs its own `ORS_API_KEY` for
+> address autocomplete via `/api/geocode`).
+
+---
 
 ## Mail & SMTP configuration
 
-PocketBase normally stores SMTP settings per-instance in the admin UI and, without a
-working SMTP server, falls back to local **sendmail**. On servers behind restricted
-relays that fallback only delivers to verified addresses (the symptom in #8). To make
-delivery reliable and reproducible, `pb_hooks/mail_config.pb.js` applies the SMTP
-settings from the environment on bootstrap.
+PocketBase normally stores SMTP settings per-instance in the admin UI and, without a working
+SMTP server, falls back to local **sendmail**. On servers behind restricted relays that fallback
+only delivers to verified addresses (the symptom in #8). To make delivery reliable and
+reproducible, `pb_hooks/mail_config.pb.js` applies the SMTP settings from the environment on
+bootstrap.
 
 ### Configuring SMTP via env vars
 
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `SMTP_HOST` | to enable SMTP | — | SMTP server hostname. **Set = configure SMTP from env; unset = leave existing settings untouched** (see below). |
-| `SMTP_PORT` | no | `587` | SMTP port (parsed as an integer). |
-| `SMTP_USERNAME` | with `SMTP_HOST` | — | SMTP auth username — usually the **full email address** (see troubleshooting). |
-| `SMTP_PASSWORD` | with `SMTP_HOST` | — | SMTP auth password. Never commit or log this. |
-| `SMTP_TLS` | no | `false` | `true` = implicit TLS (typically port **465**); `false` = STARTTLS (typically port **587**). |
-| `SMTP_AUTH_METHOD` | no | `PLAIN` | SMTP authentication method — PocketBase accepts only `PLAIN` (default) or `LOGIN`. |
-| `SMTP_LOCAL_NAME` | no | — | HELO/EHLO local name; leave empty unless the relay requires a specific one. |
-| `SENDER_ADDRESS` | no | (admin-UI value) | Optional override of the `From` address; only applied when set. |
-| `SENDER_NAME` | no | (admin-UI value) | Optional override of the sender display name; only applied when set. |
-| `APP_URL` | no | (admin-UI value) | Optional override of the app URL used to build verification/reset/email-change links; only applied when set. |
+| Variable           | Required         | Default          | Purpose                                                                                                         |
+| ------------------ | ---------------- | ---------------- | --------------------------------------------------------------------------------------------------------------- |
+| `SMTP_HOST`        | to enable SMTP   | —                | SMTP server hostname. **Set = configure SMTP from env; unset = leave existing settings untouched** (see below). |
+| `SMTP_PORT`        | no               | `587`            | SMTP port (parsed as an integer).                                                                               |
+| `SMTP_USERNAME`    | with `SMTP_HOST` | —                | SMTP auth username — usually the **full email address** (see troubleshooting).                                  |
+| `SMTP_PASSWORD`    | with `SMTP_HOST` | —                | SMTP auth password. Never commit or log this.                                                                   |
+| `SMTP_TLS`         | no               | `false`          | `true` = implicit TLS (typically port **465**); `false` = STARTTLS (typically port **587**).                    |
+| `SMTP_AUTH_METHOD` | no               | `PLAIN`          | SMTP authentication method — PocketBase accepts only `PLAIN` (default) or `LOGIN`.                              |
+| `SMTP_LOCAL_NAME`  | no               | —                | HELO/EHLO local name; leave empty unless the relay requires a specific one.                                     |
+| `SENDER_ADDRESS`   | no               | (admin-UI value) | Optional override of the `From` address; only applied when set.                                                 |
+| `SENDER_NAME`      | no               | (admin-UI value) | Optional override of the sender display name; only applied when set.                                            |
+| `APP_URL`          | no               | (admin-UI value) | Optional override of the app URL used to build verification/reset/email-change links; only applied when set.    |
 
 The TLS rule mirrors the usual convention: **`SMTP_TLS=true` for implicit TLS on 465**,
 **`SMTP_TLS=false` for STARTTLS on 587**. Set `SMTP_PORT` to match.
 
 ### Enabling, updating and removing
 
-The hook only ever **adds or updates** SMTP from the environment — it never disables or
-clears anything:
+The hook only ever **adds or updates** SMTP from the environment — it never disables or clears
+anything:
 
 - **`SMTP_HOST` set** → SMTP is enabled and configured from the env values on bootstrap
   (idempotent: it only writes when a value actually changed).
-- **`SMTP_HOST` unset** → no-op. Whatever is already configured — e.g. via the PocketBase
-  admin UI — is left completely untouched.
+- **`SMTP_HOST` unset** → no-op. Whatever is already configured — e.g. via the PocketBase admin
+  UI — is left completely untouched.
 
-This makes deploys safe: rolling this out to an instance that configures SMTP in the admin
-UI will **not** disturb its mail setup. To **remove** an env-configured server, unset the
-vars and (if you want mail off) disable/clear SMTP in the admin UI — unsetting the env
-alone does not erase what was last written to `pb_data`.
+This makes deploys safe: rolling this out to an instance that configures SMTP in the admin UI
+will **not** disturb its mail setup. To **remove** an env-configured server, unset the vars and
+(if you want mail off) disable/clear SMTP in the admin UI — unsetting the env alone does not
+erase what was last written to `pb_data`.
 
 > **All SMTP changes apply at startup only.** The hook runs on bootstrap, so after adding,
 > changing or removing any `SMTP_*` / `SENDER_*` / `APP_URL` variable you must **restart the
 > `pocketbase serve` process** for it to take effect.
 
-**PocketBase does not auto-load a `.env` file** — the vars must already be in the
-environment of the `pocketbase serve` process. For local use, keep them in a gitignored
-file and source it, so the password stays out of your shell history:
+Keep the credentials in a gitignored file and source it, so the password stays out of your shell
+history:
 
 ```bash
 set -a; source mail.env; set +a   # mail.env is gitignored
@@ -153,8 +331,8 @@ In production set these via the service/deployment config (systemd `EnvironmentF
 
 For the new-message notification (`pb_hooks/notification.pb.js`), an email is sent unless:
 
-- the recipient has opted out (`user_preferences.emailNotifications`; default is opted-in
-  when no preferences record exists), or
+- the recipient has opted out (`user_preferences.emailNotifications`; default is opted-in when no
+  preferences record exists), or
 - the recipient is currently throttled: at most one notification email per recipient per
   `MAIL_THROTTLE_MINUTES` window (default `15`).
 
@@ -169,41 +347,44 @@ In-app and push notifications are independent of these email rules.
   provided (any admin-UI config is kept); a `[mail] FAILED …` error means the settings were
   rejected and mail is **not** configured.
 - **Mails only reach verified/some addresses, or not at all.** That is the classic
-  sendmail-fallback symptom on restricted relays. Configure a real SMTP server via the
-  env vars above so PocketBase sends through it instead of local sendmail.
-- **`535 5.7.8 auth invalid` (or similar auth rejection).** Most relays expect the
-  **full email address** as the login. Set `SMTP_USERNAME` to the complete address,
-  matching the sender (e.g. `allerleih@example.org`), not just the local part.
-- **Verification / password-reset / email-change links point at the wrong host.** Those
-  links are built from `APP_URL` (the mail `meta` app URL). Set `APP_URL` to the
-  PocketBase host that actually serves the auth routes, otherwise the links in delivered
-  mails will be wrong.
+  sendmail-fallback symptom on restricted relays. Configure a real SMTP server via the env vars
+  above so PocketBase sends through it instead of local sendmail.
+- **`535 5.7.8 auth invalid` (or similar auth rejection).** Most relays expect the **full email
+  address** as the login. Set `SMTP_USERNAME` to the complete address, matching the sender (e.g.
+  `allerleih@example.org`), not just the local part.
+- **Verification / password-reset / email-change links point at the wrong host.** Those links are
+  built from `FRONTEND_URL` (with `APP_URL` as the documented fallback). Set `FRONTEND_URL` to
+  the frontend that actually serves the auth confirmation routes, otherwise the links in
+  delivered mails will be wrong.
 
-## Project Structure
+---
+
+## Project structure
 
 ```
 .
-├── package.json               # Prettier config only
-├── pb_hooks/                  # Server-side JavaScript hooks
-│   ├── main.pb.js             # Bootstrap + log interception
-│   ├── *.pb.js                # Custom route handlers / record hooks, one per area
-│   │                          #   (group.pb.js, invite.pb.js, contact.pb.js, travel.pb.js, notification.pb.js)
-│   ├── constants.js           # Environment variables & config
-│   ├── services/              # Business logic layer (group.js, mail.js, notification.js)
-│   ├── routes/                # (placeholder.js — actual routes are registered in the *.pb.js files above)
-│   ├── jobs/                  # (placeholder.js — no scheduled jobs yet)
-│   ├── utils/                 # Shared utilities
-│   │   ├── common.js          # Date formatting, helpers
-│   │   └── db.js              # wrapTransactional helper
-│   └── views/                 # HTML templates
-│       ├── layout.html        # Base HTML email layout
-│       └── mail/              # Email templates (e.g. new_message.html)
-└── pb_migrations/             # Schema migrations (auto-applied on start)
-    ├── 0000000001_remove_default_users.js   # Removes default users collection
-    ├── 1781551136_collections_snapshot.js   # Baseline schema snapshot (19 collections in the file)
-    └── …                                    # later migrations add user_geolocations, user_contacts,
-                                             #   groups, group_members, group_invites, etc.
+├── package.json               # test script + Prettier config only — nothing to install
+├── pb_hooks/                  # server-side JavaScript hooks, one file per domain area
+│   ├── main.pb.js             # bootstrap + log interception
+│   ├── constants.js           # ALL env vars & config in one place
+│   ├── *.pb.js                # route handlers / record hooks: account, group, trust, invite,
+│   │                          #   contact, travel, legal, lending, notification, retention,
+│   │                          #   metrics, digest, mail_config, auth_mail_templates, …
+│   ├── services/              # business logic (account.js, group.js, legal.js, mail.js,
+│   │                          #   notification.js)
+│   ├── integrations/          # partner-catalogue refresh port (leihbackend, WINBIAP)
+│   ├── jobs/                  # cron job bodies (retention.js, integrationSync.js)
+│   ├── utils/                 # shared helpers (common.js, email.js, db.js)
+│   ├── routes/                # placeholder — routes are registered in the *.pb.js files
+│   └── views/                 # HTML email templates (layout.html + mail/)
+├── pb_migrations/             # schema migrations, applied in filename order on every serve
+├── pb_public/                 # static assets served by PocketBase
+├── tests/                     # *.test.mjs integration tests + harness.mjs
+├── pb_data/                   # live DB + uploads (gitignored, created on first serve)
+└── .claude/rules/             # area-specific conventions (migrations, endpoints, retention, …)
 ```
+
+---
 
 ## Writing migrations
 
@@ -213,18 +394,28 @@ Each file exports an up and a down function:
 ```js
 /// <reference path="../pb_data/types.d.ts" />
 migrate(
-  (app) => { /* up:   apply the change   */ },
-  (app) => { /* down: revert the change  */ }
-);
+    (app) => {
+        /* up:   apply the change   */
+    },
+    (app) => {
+        /* down: revert the change  */
+    },
+)
 ```
 
 Conventions:
 
-- **Filename:** `<unix-seconds>_<snake_case_description>.js`. The numeric prefix must be **greater
-  than every existing migration** so it runs last — use the current Unix timestamp (`date +%s`).
+- **Filename:** `<unix-seconds>_<snake_case_description>.js`. The numeric prefix must be
+  **greater than every existing migration** so it runs last — use the current Unix timestamp
+  (`date +%s`).
 - **Always provide the down function** so the migration is reversible.
 - **Make it idempotent** where practical (guard with an `if` so re-running is a no-op), and keep
   up/down exact inverses.
+
+The full conventions — collection creation, stable IDs, the `users` collection id, ordering
+dependencies, and the fixed item-category list — are in
+[`.claude/rules/migrations.md`](.claude/rules/migrations.md); the `/new-migration` skill
+scaffolds one.
 
 ### Editing a view (e.g. adding a sortable column)
 
@@ -236,22 +427,28 @@ migration survives other branches' changes to the same view (e.g. an appended `W
 
 ```js
 migrate(
-  (app) => {
-    const v = app.findCollectionByNameOrId('items_searchable');
-    if (!v.viewQuery.includes('items.created')) {
-      v.viewQuery = v.viewQuery.replace('items.updated,', 'items.updated, items.created,');
-      app.save(v); // re-syncs the view's fields, adding `created`
-    }
-  },
-  (app) => {
-    const v = app.findCollectionByNameOrId('items_searchable');
-    v.viewQuery = v.viewQuery.replace('items.updated, items.created,', 'items.updated,');
-    app.save(v);
-  }
-);
+    (app) => {
+        const v = app.findCollectionByNameOrId('items_searchable')
+        if (!v.viewQuery.includes('items.created')) {
+            v.viewQuery = v.viewQuery.replace(
+                'items.updated,',
+                'items.updated, items.created,',
+            )
+            app.save(v) // re-syncs the view's fields, adding `created`
+        }
+    },
+    (app) => {
+        const v = app.findCollectionByNameOrId('items_searchable')
+        v.viewQuery = v.viewQuery.replace(
+            'items.updated, items.created,',
+            'items.updated,',
+        )
+        app.save(v)
+    },
+)
 ```
 
-A view's access rules reference field *names*, so adding a column leaves existing rules valid.
+A view's access rules reference field _names_, so adding a column leaves existing rules valid.
 After a view change, update the column table in the frontend's `docs/data-model.md` so the docs
 and the `ItemPublic` TS type stay honest.
 
@@ -265,74 +462,27 @@ curl 'http://127.0.0.1:8090/api/collections/items_searchable/records?sort=-creat
 
 To reverse the most recent migration(s) during development: `./pocketbase migrate down 1`.
 
-## Syncing Migrations from Production
+## Syncing migrations from production
 
-When schema changes are made via the PocketBase admin dashboard on the live server, re-export the collections snapshot:
+When schema changes are made via the PocketBase admin dashboard on the live server, re-export
+the collections snapshot:
 
 ```bash
 # On the production server (in the directory containing pb_data/)
 ./pocketbase migrate collections
 ```
 
-This generates a new `*_collections_snapshot.js` in `pb_migrations/`. Copy it into
-this repo's `pb_migrations/`, delete the previous `*_collections_snapshot.js` (keep
-only the newest one), and commit the change.
+This generates a new `*_collections_snapshot.js` in `pb_migrations/`. Copy it into this repo's
+`pb_migrations/`, delete the previous `*_collections_snapshot.js` (keep only the newest one),
+and commit the change.
 
-## Testing
-
-Integration tests live in `tests/` and run against a **real, throwaway PocketBase
-instance** — so they exercise the actual migrations, collection rules and JS hooks
-end-to-end (none of which can be unit-tested in isolation). No dependencies: they
-use Node's built-in test runner (`node:test`) and `fetch`.
-
-```bash
-npm test
-```
-
-How it works (`tests/harness.mjs`):
-- wipes `pb_test_data/` and starts a fresh instance on port **8091** (your dev
-  instance on 8090 is untouched), which auto-applies `pb_migrations/` and loads
-  `pb_hooks/`;
-- creates a superuser, seeds verified test users, and exposes small `api()` /
-  `makeUser()` helpers;
-- tears the instance down and removes `pb_test_data/` afterwards.
-
-Current coverage — the **groups feature** (45 tests). Round 2 added a
-`group_members.role` (`admin`/`member`, with the owner stored as an `admin` member)
-and public/self-join groups (`groups.isPublic`); the suites below cover both.
-- `tests/groups.test.mjs` — trustees-item visibility for owner/member/non-member,
-  the search view include/exclude + that it doesn't leak the `groups` column,
-  group-deletion fall-back to private, owner-only invite/member management.
-- `tests/visibility.test.mjs` — the independent visibility model: trust + group
-  as separate audiences, group-only items excluding trustees, public items,
-  multi-group sharing, items_public masking of group-only items, group-deletion
-  making a group-only item PRIVATE (never public), and the owner (as an admin
-  member) seeing an item a member shared with the owner's group.
-- `tests/invites.test.mjs` — invite-link semantics: maxUses cap, idempotent join,
-  owner self-join, expiry, unknown token, revoked invite.
-- `tests/members.test.mjs` — inviting people in: owner adds a member directly
-  (member gains access), non-owners can't add members, owner removes a member
-  (loses access), a member can leave but can't remove others; every member sees
-  the full roster, the owner is an `admin` member (added members are `member`s),
-  and the owner cannot remove their own admin row.
-- `tests/public-groups.test.mjs` — public/self-join groups: a non-member can read
-  a public group (name + description) but not a private one; a user can self-join
-  a public group and then see its items; self-join is rejected for private groups,
-  cannot add someone other than yourself, and cannot grant yourself `role=admin`.
-- `tests/edge.test.mjs` — public preview vs. auth-required join, maxUses=0 =
-  unlimited, and the unique-membership constraint (no duplicate adds).
-- `tests/cascade.test.mjs` — cascadeDelete lifecycle: owner-account deletion
-  removes the group + members + invites, member-account deletion removes only
-  their membership, group deletion removes its invites, multi-group items aren't
-  wrongly flipped, all group-only items in a deleted group flip to private, and an
-  invited member lands with `role=member`.
-- `tests/conversations.test.mjs` — the conversation **requester** keeps item access
-  after being removed from the group (so the chat keeps working) without the item
-  leaking back into search/profile; createRule allows members and blocks non-members.
-
-> Requires the `pocketbase` binary in the repo root (the same one used for `serve`).
-> Tests run serially (`--test-concurrency=1`) since they share the test port.
+---
 
 ## Related
 
-- **Frontend**: [share](../share) — SvelteKit frontend
+- **Frontend:** [share-mvp](https://github.com/share-open-sharing-infrastructure/share-mvp) —
+  the SvelteKit app, its documentation (`docs/`), and the local stack bootstrapper
+  (`scripts/dev-stack.sh`)
+- **Operations runbook for the sync/refresh endpoints:** `share-mvp/docs/operations/integration-sync.md`
+- **Data model & collection reference:** `share-mvp/docs/data-model.md`
+- **Issues:** [GitHub Project](https://github.com/orgs/share-open-sharing-infrastructure/projects/2)
