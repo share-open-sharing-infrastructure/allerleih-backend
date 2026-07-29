@@ -63,12 +63,20 @@ function leihbackendHandler(items) {
     }
 }
 
-/** WINBIAP WebOPAC stub under /webopac: answers cataloguedata.aspx with one exemplar StatusId. */
-function winbiapHandler(statusId) {
+/**
+ * WINBIAP WebOPAC stub under /webopac: answers cataloguedata.aspx with one catalogue record.
+ * `opts` is either a bare StatusId (legacy shorthand, most tests only care about routing/status)
+ * or `{ statusId, catalogData, exemplar }` — `catalogData`/`exemplar` overrides are shallow-merged
+ * onto a minimal-but-valid record (real WINBIAP responses carry many more fields than we use).
+ */
+function winbiapHandler(opts) {
+    const o = typeof opts === 'number' ? { statusId: opts } : opts || {}
+    const exemplar = Object.assign({ StatusId: o.statusId }, o.exemplar)
+    const catalogData = Object.assign({ Titel1: 'WebOPAC Titel', MediaItemsUnsorted: [exemplar] }, o.catalogData)
     return (req, res) => {
         if (req.url.indexOf('/webopac/service/cataloguedata.aspx') === 0) {
             res.writeHead(200, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({ Data: [{ CatalogData: { MediaItemsUnsorted: [{ StatusId: statusId }] } }] }))
+            res.end(JSON.stringify({ Data: [{ CatalogData: catalogData }] }))
             return
         }
         res.writeHead(404)
@@ -284,7 +292,7 @@ test('4. routing safety: the leihbackend catch-all never claims a WINBIAP item',
         const win = await pollItem(winItem, (r) => r.status === 'available')
         assert.ok(win, 'WINBIAP item refreshed to available by the winbiap integration')
         assert.ok(!win.description.startsWith(DESCRIPTION_PREFIX), 'WINBIAP item must NOT be archived by the catch-all')
-        assert.equal(win.name, 'WebOPAC Buch', 'WINBIAP refresh is status-only — name untouched')
+        assert.equal(win.name, 'WebOPAC Titel', 'WINBIAP refresh re-maps name from the catalogue record')
 
         const lbUpdated = await pollItem(lbItem, (r) => r.status === 'available')
         assert.ok(lbUpdated, 'the leihbackend item is processed by leihbackend')
@@ -535,5 +543,64 @@ test('11. a zero step (*/0) is rejected like any other invalid expression (cronA
         assert.ok(ids.includes('integration_sync'), `the sibling job must stay registered (got ${ids})`)
     } finally {
         stopPB(pb)
+    }
+})
+
+test('12. WINBIAP field enrichment: description squashed from Annotation/CountCopies/BranchName/ReservationCount/Borrow, in order', async () => {
+    const full = await startStub(winbiapHandler({
+        statusId: 2, // entliehen => unavailable
+        catalogData: {
+            Titel1: 'BOOKii- Der Hörstift',
+            Annotation: 'Bookii ergänzt Kinderbücher mit digitalen Inhalten.',
+            CountCopies: 4,
+            ReservationCount: 3,
+        },
+        exemplar: { BranchName: 'Kinder- und Jugendbücherei', Borrow: { DateOfReturn: '2026-08-01T00:00:00' } },
+    }))
+    // No Annotation/CountCopies/BranchName/ReservationCount/Borrow at all — every optional line
+    // must be omitted, not filled with a placeholder.
+    const sparse = await startStub(winbiapHandler({ statusId: 1, catalogData: { Titel1: 'Leeres Beispiel' } }))
+    const pb = await startPB({ REFRESH_CRON, INTEGRATION_ALLOW_INSECURE_URL: 'true' })
+    try {
+        const fullInst = await seedInstitution({ username: 'full', leihbackendUrl: `${stubUrl(full)}/webopac`, city: 'Lüneburg' })
+        const sparseInst = await seedInstitution({ username: 'sparse', leihbackendUrl: `${stubUrl(sparse)}/webopac`, city: 'Lüneburg' })
+
+        const fullItem = await seedItem({
+            name: 'Alt', owner: fullInst.id, externalId: '118$5031337S', status: 'available',
+            categories: ['Für Kinder'], description: 'alt', place: 'Lüneburg',
+        })
+        const sparseItem = await seedItem({
+            name: 'Alt2', owner: sparseInst.id, externalId: '118$0000000X', status: 'unknown',
+            categories: ['Sonstiges'], description: 'alt2', place: 'Lüneburg',
+        })
+
+        await triggerRefresh()
+
+        const updatedFull = await pollItem(fullItem, (r) => r.status === 'unavailable')
+        assert.ok(updatedFull, 'fully-populated record refreshed')
+        assert.equal(updatedFull.name, 'BOOKii- Der Hörstift', 'name mapped from Titel1')
+        assert.equal(
+            updatedFull.description,
+            [
+                'Bookii ergänzt Kinderbücher mit digitalen Inhalten.',
+                'Exemplare: 4',
+                'Standort: Kinder- und Jugendbücherei',
+                'verliehen bis 01.08.2026',
+                'Schon von 3 Menschen vorbestellt',
+            ].join('\n'),
+            'lines assembled in order — annotation, copies, branch, due date, reservations last'
+        )
+        // Carried over from the stored item unchanged — the search response has no equivalents.
+        assert.equal(updatedFull.place, 'Lüneburg', 'place untouched by refresh')
+        assert.deepEqual(updatedFull.categories, ['Für Kinder'], 'categories untouched by refresh')
+
+        const updatedSparse = await pollItem(sparseItem, (r) => r.status === 'available')
+        assert.ok(updatedSparse, 'sparse record refreshed')
+        assert.equal(updatedSparse.name, 'Leeres Beispiel', 'name mapped from Titel1')
+        assert.equal(updatedSparse.description, '', 'all optional lines omitted when their source fields are absent')
+    } finally {
+        stopPB(pb)
+        closeStub(full)
+        closeStub(sparse)
     }
 })

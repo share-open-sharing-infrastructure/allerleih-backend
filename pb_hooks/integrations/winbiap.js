@@ -1,9 +1,11 @@
 /// <reference path="../../pb_data/types.d.ts" />
 
 /**
- * WINBIAP WebOPAC refresh integration (status only). Goja port of share-mvp
- * `winbiap/client.ts` + `winbiap/index.ts`. Looks up one item's current availability by its
- * full barcode via `Job=Search&SearchCondition1=46`, and produces a status-only update.
+ * WINBIAP WebOPAC refresh integration. Goja port of share-mvp `winbiap/client.ts` +
+ * `winbiap/index.ts`. Looks up one item's current catalogue record by its full barcode via
+ * `Job=Search&SearchCondition1=46`, and re-maps name/description/status from it. Categories,
+ * place, externalUrl and externalImgUrl are carried over from the stored item unchanged — the
+ * WebOPAC search response has no AllerLeih-specific fields (category, a public deep link, …).
  *
  * $http.send notes (spike share-mvp#487 §4.4): `timeout` is in SECONDS; the query string is
  * transmitted byte-for-byte as written (so the `%2B`→`+` retry works identically to `fetch`);
@@ -15,6 +17,8 @@ const { assertPublicHttpUrl } = require(`${__hooks}/integrations/urlGuard.js`)
 const { INTEGRATION_ALLOW_INSECURE_URL } = require(`${__hooks}/constants.js`)
 
 const TIMEOUT_SECONDS = 10
+const MAX_NAME_LENGTH = 200
+const MAX_DESCRIPTION_LENGTH = 5000
 
 // Mediennummer search condition code (docs/winbiap_api-search.pdf §5.1.1).
 const SEARCH_CONDITION_MEDIENNUMMER = 46
@@ -98,12 +102,12 @@ function requestSearch(url, base) {
 }
 
 /**
- * Looks up one item's current availability by its full barcode (e.g. `118$5031208P`).
+ * Looks up one item's current catalogue record by its full barcode (e.g. `118$5031208P`).
  * @returns `{ found: false }` when the catalogue has no such item (→ archive), or
- *          `{ found: true, status }` with the derived availability.
+ *          `{ found: true, record }` — the raw `Data[0]` entry (`CatalogData` + `HasCover`).
  * @throws on network / non-2xx / unexpected-body failures (→ transient, leave as-is).
  */
-function fetchItemStatus(baseUrl, barcode) {
+function fetchItemRecord(baseUrl, barcode) {
     const base = normalizeBaseUrl(baseUrl)
     assertPublicHttpUrl(base, INTEGRATION_ALLOW_INSECURE_URL)
 
@@ -116,9 +120,47 @@ function fetchItemStatus(baseUrl, barcode) {
 
     const record = body.Data[0]
     if (!record) return { found: false }
+    return { found: true, record: record }
+}
 
-    const mediaItems = record.CatalogData ? record.CatalogData.MediaItemsUnsorted : undefined
-    return { found: true, status: statusFromMediaItems(mediaItems) }
+/**
+ * Formats an ISO datetime (`YYYY-MM-DDTHH:mm:ss`, WINBIAP's fixed shape) as German-style
+ * `DD.MM.YYYY`, or `null` for a missing value or the .NET default zero-date
+ * (`0001-01-01T...`, meaning "not applicable" — e.g. a copy that isn't currently on loan has
+ * no real `DateOfReturn`). Regex-parsed rather than via `Date` to avoid any JS-engine-specific
+ * ISO-parsing/timezone ambiguity in Goja.
+ */
+function formatGermanDate(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T/.exec(String(iso || ''))
+    if (!m) return null
+    const year = m[1]
+    if (year === '0001') return null
+    return m[3] + '.' + m[2] + '.' + year
+}
+
+/**
+ * Squashes a handful of WebOPAC catalogue fields into the item description: the free-text
+ * annotation, the title's total copy count, this specific exemplar's branch, its current due
+ * date if out on loan, and — last, by design — its reservation queue.
+ */
+function buildDescription(catalogData, exemplar) {
+    const lines = []
+
+    const returnDate = formatGermanDate(exemplar.Borrow && exemplar.Borrow.DateOfReturn)
+    if (returnDate) lines.push('verliehen bis ' + returnDate)
+
+    const annotation = String(catalogData.Annotation || '').trim()
+    if (annotation) lines.push(annotation)
+
+    if (catalogData.CountCopies) lines.push('Exemplare: ' + catalogData.CountCopies)
+    if (exemplar.BranchName) lines.push('Standort: ' + exemplar.BranchName)
+
+
+    if (catalogData.ReservationCount > 0) {
+        lines.push('Schon von ' + catalogData.ReservationCount + ' Menschen vorbestellt')
+    }
+
+    return lines.join('\n').slice(0, MAX_DESCRIPTION_LENGTH)
 }
 
 /**
@@ -142,35 +184,47 @@ function isWinbiapItem(item) {
     )
 }
 
-/** Builds a status-only mapped item: the stored item's synced fields with `status` replaced. */
-function withStatus(item, status, ownerId) {
+/**
+ * Maps a WebOPAC search result to AllerLeih `items` fields. `name`/`description`/`status` are
+ * re-derived from the fetched record; `categories`/`place`/`externalUrl`/`externalImgUrl` are
+ * carried over from the stored item unchanged (the search response has no equivalents for
+ * those). The exemplar used for `Standort`/`verliehen bis` is `MediaItemsUnsorted[0]` — since
+ * the search is by exact barcode, that array holds exactly the one physical copy this item's
+ * `externalId` identifies (`CatalogData.CountCopies` is the *title's* total copies across all
+ * branches, a different number).
+ */
+function mapItem(record, storedItem, ownerId) {
+    const catalogData = record.CatalogData || {}
+    const mediaItems = catalogData.MediaItemsUnsorted || []
+    const exemplar = mediaItems[0] || catalogData.MediaItem || {}
+
     return {
-        externalId: item.externalId || '',
-        name: item.name,
-        description: item.description,
-        categories: item.categories,
-        place: item.place,
-        externalUrl: item.externalUrl,
-        externalImgUrl: item.externalImgUrl,
-        status: status,
+        externalId: storedItem.externalId || '',
+        name: String(catalogData.Titel1 || '').trim().slice(0, MAX_NAME_LENGTH),
+        description: buildDescription(catalogData, exemplar),
+        categories: storedItem.categories,
+        place: storedItem.place,
+        externalUrl: storedItem.externalUrl,
+        externalImgUrl: storedItem.externalImgUrl,
+        status: statusFromMediaItems(mediaItems),
         owner: ownerId,
         trusteesOnly: false, // type-filler: not written on update (applyDiff writes only synced fields)
     }
 }
 
 /**
- * Re-fetches one stored WINBIAP item's availability and produces a status-only update.
+ * Re-fetches one stored WINBIAP item's catalogue record and re-maps name/description/status.
  * No catalogue hit ⇒ `gone` (archive); a transient fetch failure throws (the refresh flow
  * records it and leaves the item untouched).
  */
 function refreshOne(institution, item) {
     const baseUrl = (institution && institution.leihbackendUrl) || ''
-    const result = fetchItemStatus(normalizeBaseUrl(baseUrl), item.externalId || '')
+    const result = fetchItemRecord(normalizeBaseUrl(baseUrl), item.externalId || '')
     if (!result.found) return { kind: 'gone' }
-    return { kind: 'found', item: withStatus(item, result.status, institution.id) }
+    return { kind: 'found', item: mapItem(result.record, item, institution.id) }
 }
 
-/** Refresh integration for WINBIAP WebOPAC items (status only). Registered FIRST (specific). */
+/** Refresh integration for WINBIAP WebOPAC items: re-maps name/description/status. Registered FIRST (specific). */
 const winbiapRefreshIntegration = {
     id: 'winbiap',
     claimsInstitution: isWinbiapInstitution,
@@ -185,5 +239,8 @@ module.exports = {
     isWinbiapItem,
     statusFromMediaItems,
     normalizeBaseUrl,
-    fetchItemStatus,
+    fetchItemRecord,
+    mapItem,
+    buildDescription,
+    formatGermanDate,
 }
