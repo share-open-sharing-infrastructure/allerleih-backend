@@ -46,8 +46,9 @@ const MAIL_THROTTLE_MINUTES = intEnv('MAIL_THROTTLE_MINUTES', 15)
 const FRONTEND_URL = ($os.getenv('FRONTEND_URL') || '').replace(/\/+$/, '')
 /** Bearer token for /api/sync + /api/refresh — must equal the frontend's SYNC_SECRET */
 const SYNC_SECRET = $os.getenv('SYNC_SECRET') || ''
-/** Cron expression for the full catalogue pull (POST /api/sync); empty = job disabled.
- * Phase 1 (#487): still POSTs the frontend — FRONTEND_URL + SYNC_SECRET remain required for it. */
+/** Cron expression for the full catalogue pull; empty = job disabled.
+ * Phase 2 (#487): now runs LOCALLY in the backend (integrations/sync.js) — no longer POSTs the
+ * frontend, so it needs neither FRONTEND_URL nor SYNC_SECRET, only a valid expression. */
 const SYNC_CRON = $os.getenv('SYNC_CRON') || ''
 /** Cron expression for the per-item refresh; empty = job disabled.
  * Phase 1 (#487): now runs LOCALLY in the backend (pb_hooks/integrations/refresh.js) — no longer
@@ -59,10 +60,17 @@ const REFRESH_CRON = $os.getenv('REFRESH_CRON') || ''
 const SYNC_TIMEOUT_SECONDS = intEnv('SYNC_TIMEOUT_SECONDS', 540)
 /**
  * Allow http:// and private/loopback integration base URLs, bypassing the SSRF guard in
- * pb_hooks/integrations/urlGuard.js. Local dev / integration tests only (e.g. loopback stub
- * servers) — NEVER set in production. Backend replacement for the frontend's Vite `dev` flag.
+ * pb_hooks/integrations/urlGuard.js. Applies to BOTH the refresh (fetchItemById) and, as of #487
+ * Phase 2, the full-sync bulk feed (fetchAllItems). Local dev / integration tests only (e.g.
+ * loopback stub servers) — NEVER set in production. Backend replacement for the Vite `dev` flag.
  */
 const INTEGRATION_ALLOW_INSECURE_URL = $os.getenv('INTEGRATION_ALLOW_INSECURE_URL') === 'true'
+/**
+ * #487 Phase 2: when `'true'`, registers the guarded backfill test route
+ * `POST /api/_test/backfill-sync-config` (integration_backfill.pb.js, superuser-required).
+ * Local dev / integration tests only — never set in production (the route does not exist there).
+ */
+const INTEGRATION_TEST_ROUTE = $os.getenv('INTEGRATION_TEST_ROUTE') === 'true'
 
 /**
  * GDPR data-retention windows (#461) — enforced by the nightly jobs in
@@ -140,6 +148,7 @@ module.exports = {
     REFRESH_CRON,
     SYNC_TIMEOUT_SECONDS,
     INTEGRATION_ALLOW_INSECURE_URL,
+    INTEGRATION_TEST_ROUTE,
     RETENTION_INACTIVE_MONTHS,
     RETENTION_MESSAGES_MONTHS,
     RETENTION_NOTIFICATIONS_DAYS,

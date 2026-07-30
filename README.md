@@ -245,23 +245,33 @@ The hooks read configuration from environment variables, centralised in
 service/deployment config in production. The full reference table is in
 [`.claude/rules/config.md`](.claude/rules/config.md); the ones you're most likely to touch:
 
-| Variable                                     | Required                  | Default                      | Purpose                                                                                                                                                                           |
-| -------------------------------------------- | ------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ORS_API_KEY`                                | **yes, for travel times** | —                            | OpenRouteService key used by the `/api/travel-times` hook. **Without it travel times silently stop working** (ORS rejects every request); the hook logs an error on each attempt. |
-| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY`     | for Web Push              | —                            | VAPID keypair for push notifications.                                                                                                                                             |
-| `VAPID_SUBJECT`                              | no                        | `mailto:allerleih@posteo.de` | VAPID subject (mailto: or https: URI).                                                                                                                                            |
-| `LOG_LEVEL`                                  | no                        | `4`                          | Log verbosity: 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR.                                                                                                                                  |
-| `DRY_MODE`                                   | no                        | `false`                      | When `true`, suppresses side effects such as outbound email.                                                                                                                      |
-| `MAIL_THROTTLE_MINUTES`                      | no                        | `15`                         | Max one notification email per recipient within this window.                                                                                                                      |
-| `FRONTEND_URL`                               | for auth mails + sync     | `''`                         | SvelteKit frontend origin (no trailing slash) — the host injected into the `users` auth-mail links and the target of the sync cron.                                               |
-| `SYNC_SECRET` / `SYNC_CRON` / `REFRESH_CRON` | for integrations          | `''`                         | Partner-catalogue sync & refresh jobs. See [`.claude/rules/integration-sync.md`](.claude/rules/integration-sync.md).                                                              |
-| `RETENTION_*`                                | no                        | see `constants.js`           | GDPR retention windows for the nightly purge jobs; `0` disables a job. See [`.claude/rules/retention.md`](.claude/rules/retention.md).                                            |
+| Variable                                 | Required                  | Default                      | Purpose                                                                                                                                                                          |
+| ---------------------------------------- | ------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ORS_API_KEY`                            | **yes, for travel times** | —                            | OpenRouteService key used by the `/api/travel-times` hook. **Without it travel times silently stop working** (ORS rejects every request); the hook logs an error on each attempt. |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | for Web Push              | —                            | VAPID keypair for push notifications.                                                                                                                                            |
+| `VAPID_SUBJECT`                          | no                        | `mailto:allerleih@posteo.de` | VAPID subject (mailto: or https: URI).                                                                                                                                           |
+| `LOG_LEVEL`                              | no                        | `4`                          | Log verbosity: 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR.                                                                                                                                 |
+| `DRY_MODE`                               | no                        | `false`                      | When `true`, suppresses side effects such as outbound email (and skips the integration cron fetches/writes).                                                                      |
+| `MAIL_THROTTLE_MINUTES`                  | no                        | `15`                         | Max one notification email per recipient within this window.                                                                                                                     |
+| `FRONTEND_URL`                           | for auth mails            | `''`                         | SvelteKit frontend origin (no trailing slash) — the host injected into the `users` auth-mail links. **#487 Phase 2: no longer used by the integration crons** (they run locally). |
+| `SYNC_CRON`                              | no                        | `''` (off)                   | Cron expression for the full catalogue pull. **#487 Phase 2: runs locally in the backend** (`integrations/sync.js`) — needs neither `FRONTEND_URL` nor `SYNC_SECRET`.             |
+| `REFRESH_CRON`                           | no                        | `''` (off)                   | Cron expression for the per-item refresh (`integrations/refresh.js`, local). Also needs no `FRONTEND_URL`/`SYNC_SECRET`.                                                          |
+| `INTEGRATION_ALLOW_INSECURE_URL`         | no                        | `false`                      | Allow `http://` + private/loopback source base URLs (bypasses the SSRF guard). **Local dev / tests only — never in production.**                                                  |
+| `INTEGRATION_TEST_ROUTE`                 | no                        | `false`                      | When `'true'`, registers the guarded backfill route `POST /api/_test/backfill-sync-config` (superuser). **Local dev / tests only** — absent in production.                        |
+| `RETENTION_*`                            | no                        | see `constants.js`           | GDPR retention windows for the nightly purge jobs; `0` disables a job. See [`.claude/rules/retention.md`](.claude/rules/retention.md).                                            |
 
 > **Note:** travel-time computation moved from the frontend into this backend hook, so
 > `ORS_API_KEY` must be present **here** (the frontend still needs its own `ORS_API_KEY` for
 > address autocomplete via `/api/geocode`).
 
 ---
+
+> **Integration sync (#487 Phase 2):** the `SYNC_CRON` + `REFRESH_CRON` jobs now run entirely in
+> the backend (native `$app`, per-institution transaction, `sync_config` discovery) — they no
+> longer POST the frontend, so `FRONTEND_URL` / `SYNC_SECRET` / `SYNC_TIMEOUT_SECONDS` are needed
+> only for the frontend's remaining **manual** `/api/sync` + `/api/refresh` (dropped in Phase 3).
+> The full env table lives in [`pb_hooks/constants.js`](pb_hooks/constants.js). This repo has no
+> `.env.example`; set variables in the `pocketbase serve` process environment.
 
 ## Mail & SMTP configuration
 
