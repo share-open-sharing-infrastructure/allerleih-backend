@@ -49,18 +49,19 @@ pb_hooks/                    # custom server logic (auto-loaded JS), one file pe
 ├── lending.pb.js                 # #373 conversations onRecordUpdateRequest guard (abort flow)
 ├── integration_sync.pb.js        # cron registration: integration_sync + integration_refresh — as of #487
 │                                 #   Phase 2 BOTH run LOCALLY (see .claude/rules/integration-sync.md)
-├── integration_backfill.pb.js    # #487 Phase 2: guarded test route POST /api/_test/backfill-sync-config
-│                                 #   (only when INTEGRATION_TEST_ROUTE=true; superuser)
+├── integration_import.pb.js      # #487 Phase 3: CSV-import write path — POST /api/import/{apply,preview,
+│                                 #   refresh} (requireAuth, institution-only, owner = e.auth.id)
 ├── integrations/                 # #487 Goja port of the integration pipeline: sync.js (runSync full pull),
 │                                 #   refresh.js (runRefresh per-item), db.js (findSyncConfigs + applyDiff),
-│                                 #   diff.js, leihbackend.js, winbiap.js, urlGuard.js, lock.js, types.js
+│                                 #   import.js (Phase 3 apply/preview/refresh), diff.js, leihbackend.js,
+│                                 #   winbiap.js, urlGuard.js, lock.js, types.js
 ├── account.pb.js                 # DELETE /api/account + export, deleted-login block, email normalization (#557)
 ├── retention.pb.js               # GDPR retention cron jobs (#461) + guarded test route
 ├── services/                     # shared business logic: account.js, group.js, legal.js, notification.js,
-│                                 #   mail.js, syncConfig.js (backfill users.leihbackendUrl → sync_config)
+│                                 #   mail.js, syncConfig.js (used only by the historical backfill migration)
 ├── utils/                        # common.js, email.js (normalizeEmail, #557), db.js
 ├── views/                        # email HTML templates (layout.html + mail/)
-├── jobs/                         # cron job bodies: retention.js, integrationSync.js
+├── jobs/                         # cron job bodies: retention.js
 ├── routes/                       # placeholder — routes currently live in *.pb.js
 pb_migrations/               # <timestamp>_<description>.js — schema, applied in filename order
 pb_public/                   # static assets served by PocketBase

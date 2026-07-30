@@ -1,10 +1,10 @@
 /// <reference path="../../pb_data/types.d.ts" />
 
 /**
- * SSRF defense-in-depth for institution-configured base URLs (currently `users.leihbackendUrl`).
- * Goja port of share-mvp `core/urlGuard.ts`. These URLs are admin-onboarded but fetched
- * server-side by the refresh cron, so a mis-set (or maliciously set) URL must not point the
- * server at itself, the PocketBase admin API, or anything else on the internal network.
+ * SSRF defense-in-depth for institution-configured base URLs (`sync_config.baseUrl`; CSV-import
+ * rows carry no base URL). Goja port of share-mvp `core/urlGuard.ts`. These URLs are admin-onboarded
+ * but fetched server-side by the sync/refresh cron, so a mis-set (or maliciously set) URL must not
+ * point the server at itself, the PocketBase admin API, or anything else on the internal network.
  *
  * Checks the URL LITERAL only — a public hostname resolving to a private IP (DNS rebinding) is
  * out of scope, same as the TS twin.

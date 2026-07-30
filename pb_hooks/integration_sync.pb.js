@@ -4,14 +4,13 @@
  * Integration sync scheduling — registers the two cron jobs. Schedules come from SYNC_CRON /
  * REFRESH_CRON (standard 5-field cron expressions); an empty/unset variable disables that job.
  *
- * As of #487 Phase 2 BOTH jobs run LOCALLY in the backend (native $app, per-institution
- * transaction, shared $app.store() overlap lock) — no HTTP POST to the frontend:
+ * BOTH jobs run LOCALLY in the backend (native $app, per-institution transaction, shared
+ * $app.store() overlap lock) — no HTTP POST to the frontend:
  * - `integration_sync`    → require(`${__hooks}/integrations/sync.js`).runSync()    (full pull)
  * - `integration_refresh` → require(`${__hooks}/integrations/refresh.js`).runRefresh() (per-item)
  *
- * Both discover institutions from the `sync_config` collection. Neither needs FRONTEND_URL or
- * SYNC_SECRET anymore (those stay in constants.js only for the frontend's manual /api/sync +
- * /api/refresh, removed in Phase 3).
+ * Both discover institutions from the `sync_config` collection; neither needs any frontend
+ * config (#487 Phase 3 removed the old SYNC_SECRET / frontend-POST path entirely).
  *
  * This top-level code runs once at load time, so requiring constants.js here is fine — but the
  * cron callbacks execute later in an ISOLATED context: they see no top-level variables at all

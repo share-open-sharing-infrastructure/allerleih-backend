@@ -8,9 +8,11 @@
  * defined in the migration context), so the backfill logic lives once in
  * `pb_hooks/services/syncConfig.js` and is reused here — no inline mirror needed.
  *
- * NOTE: the test harness applies migrations against an EMPTY users table, so this copy loop is
- * exercised via the guarded test route (`POST /api/_test/backfill-sync-config`) + a pre-seeded
- * fixture, not by `npm test`'s migration apply. Idempotent, so re-running is safe.
+ * NOTE: the test harness applies migrations against an EMPTY users table, so `npm test` only proves
+ * this migration APPLIES, never that it copies anything. The copy loop was covered by the guarded
+ * Phase-2 test route, which Phase 3 removed together with the source field — so before running this
+ * against production data, verify the resulting `sync_config` rows by hand (PR checklist, see also
+ * 1784666446_remove_users_leihbackend_fields.js). Idempotent, so re-running is safe.
  *
  * down(): removes every `sync_config` row (the collection itself is dropped by the create
  * migration's down); `users` is left untouched.
