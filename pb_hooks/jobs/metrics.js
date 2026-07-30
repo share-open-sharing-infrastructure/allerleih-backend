@@ -218,15 +218,36 @@ function computeImpact(app) {
     return { counterfactual }
 }
 
+/**
+ * Institutions that have an external catalogue integration configured. Discovery reads the
+ * `sync_config` collection (#487): `users.leihbackendUrl` — the old source of this filter — is
+ * dropped by the Phase 3 migration. One institution can hold several configs (e.g. leihbackend
+ * plus WINBIAP), so the ids are de-duplicated before the per-institution lookup.
+ */
+function findIntegratedInstitutions(app) {
+    const configs = app.findRecordsByFilter('sync_config', 'baseUrl != ""', '', 0, 0, {})
+    const seen = {}
+    const institutions = []
+
+    configs.forEach((config) => {
+        const id = config.get('institution')
+        if (!id || seen[id]) return
+        seen[id] = true
+
+        let user
+        try {
+            user = app.findRecordById('users', id)
+        } catch (err) {
+            return // config pointing at a vanished user — skip, never abort the snapshot
+        }
+        if (user && user.get('deleted') !== true) institutions.push(user)
+    })
+
+    return institutions
+}
+
 function computeIntegrations(app) {
-    const institutions = app.findRecordsByFilter(
-        'users',
-        'deleted != true && isInstitution = true && leihbackendUrl != ""',
-        '',
-        0,
-        0,
-        {}
-    )
+    const institutions = findIntegratedInstitutions(app)
 
     const lastSyncByInstitution = institutions.map((inst) => {
         const items = app.findRecordsByFilter('items', 'owner = {:id}', '-updated', 1, 0, { id: inst.id })

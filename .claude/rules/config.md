@@ -14,11 +14,9 @@ All env/config is centralized here; most have safe defaults:
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | `VAPID_*` | — / `mailto:allerleih@posteo.de` | Web-push |
 | `DRY_MODE` | `DRY_MODE` | `false` | When `true`, skips sending email/notifications (local dev) |
 | `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
-| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — target of the sync/refresh cron calls. **Must be `https://` unless loopback** — the sync secret travels as a Bearer header (non-loopback `http://` logs a startup warning) |
-| `SYNC_SECRET` | `SYNC_SECRET` | `''` | Bearer token for the frontend's `/api/sync` + `/api/refresh`; must equal the frontend's `SYNC_SECRET` |
-| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull (`POST /api/sync`); empty disables the job. Still needs `FRONTEND_URL` + `SYNC_SECRET` |
-| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh; empty disables the job. **#487 Phase 1: runs LOCALLY** (`integrations/refresh.js`) — needs neither `FRONTEND_URL` nor `SYNC_SECRET` |
-| `SYNC_TIMEOUT_SECONDS` | `SYNC_TIMEOUT_SECONDS` | `540` | HTTP timeout for the frontend **sync** call (a full sync can take minutes). Refresh writes direct via `$app`, no HTTP timeout |
+| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — host for the `users` auth-mail links (#447) and the `APP_URL` fallback. **#487 Phase 3: no longer used by the integrations** (they run locally; `SYNC_SECRET` is gone) |
+| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull — runs LOCALLY (`integrations/sync.js`); no HTTP, only a valid expression. Empty disables the job |
+| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh — runs LOCALLY (`integrations/refresh.js`); no HTTP, only a valid expression. Empty disables the job |
 | `INTEGRATION_ALLOW_INSECURE_URL` | `INTEGRATION_ALLOW_INSECURE_URL` | `false` | Refresh only: allow `http://` + private/loopback source base URLs, bypassing the `integrations/urlGuard.js` SSRF check. **Local dev / integration tests only — never in production** (backend replacement for the frontend's Vite `dev` flag) |
 | `RETENTION_INACTIVE_MONTHS` | `RETENTION_INACTIVE_MONTHS` | `6` | Anonymize accounts with no login for N months (0 = off) |
 | `RETENTION_MESSAGES_MONTHS` | `RETENTION_MESSAGES_MONTHS` | `6` | Delete conversations N months after last activity (0 = off) |
