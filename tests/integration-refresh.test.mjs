@@ -604,3 +604,26 @@ test('12. WINBIAP field enrichment: description squashed from Annotation/CountCo
         closeStub(sparse)
     }
 })
+
+test('13. a record without Titel1 keeps the stored name instead of blanking the required field', async () => {
+    // items.name is `required`, and applyDiff runs in one all-or-nothing per-institution
+    // transaction — writing '' would roll back the whole institution's refresh on every run.
+    const stub = await startStub(winbiapHandler({ statusId: 1, catalogData: { Titel1: '' } }))
+    const pb = await startPB({ REFRESH_CRON, INTEGRATION_ALLOW_INSECURE_URL: 'true' })
+    try {
+        const inst = await seedInstitution({ username: 'titleless', leihbackendUrl: `${stubUrl(stub)}/webopac`, city: 'Lüneburg' })
+        const item = await seedItem({
+            name: 'Gespeicherter Titel', owner: inst.id, externalId: '118$5031999Z', status: 'unknown',
+            categories: ['Sonstiges'], description: 'alt', place: 'Lüneburg',
+        })
+
+        await triggerRefresh()
+
+        const updated = await pollItem(item, (r) => r.status === 'available')
+        assert.ok(updated, 'the item is still refreshed (status applied), not rolled back')
+        assert.equal(updated.name, 'Gespeicherter Titel', 'stored name kept when the catalogue record has no Titel1')
+    } finally {
+        stopPB(pb)
+        closeStub(stub)
+    }
+})

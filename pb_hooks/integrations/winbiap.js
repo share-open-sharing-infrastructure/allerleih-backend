@@ -146,15 +146,14 @@ function formatGermanDate(iso) {
 function buildDescription(catalogData, exemplar) {
     const lines = []
 
-    const returnDate = formatGermanDate(exemplar.Borrow && exemplar.Borrow.DateOfReturn)
-    if (returnDate) lines.push('verliehen bis ' + returnDate)
-
     const annotation = String(catalogData.Annotation || '').trim()
     if (annotation) lines.push(annotation)
 
     if (catalogData.CountCopies) lines.push('Exemplare: ' + catalogData.CountCopies)
     if (exemplar.BranchName) lines.push('Standort: ' + exemplar.BranchName)
 
+    const returnDate = formatGermanDate(exemplar.Borrow && exemplar.Borrow.DateOfReturn)
+    if (returnDate) lines.push('verliehen bis ' + returnDate)
 
     if (catalogData.ReservationCount > 0) {
         lines.push('Schon von ' + catalogData.ReservationCount + ' Menschen vorbestellt')
@@ -192,15 +191,23 @@ function isWinbiapItem(item) {
  * the search is by exact barcode, that array holds exactly the one physical copy this item's
  * `externalId` identifies (`CatalogData.CountCopies` is the *title's* total copies across all
  * branches, a different number).
+ *
+ * `name` falls back to the stored name when the record carries no `Titel1`: `items.name` is
+ * `required`, and `applyDiff` runs inside one all-or-nothing per-institution transaction — a
+ * single title-less record would otherwise roll back that institution's entire refresh on
+ * every run.
  */
 function mapItem(record, storedItem, ownerId) {
     const catalogData = record.CatalogData || {}
     const mediaItems = catalogData.MediaItemsUnsorted || []
     const exemplar = mediaItems[0] || catalogData.MediaItem || {}
+    const title = String(catalogData.Titel1 || '')
+        .trim()
+        .slice(0, MAX_NAME_LENGTH)
 
     return {
         externalId: storedItem.externalId || '',
-        name: String(catalogData.Titel1 || '').trim().slice(0, MAX_NAME_LENGTH),
+        name: title || storedItem.name,
         description: buildDescription(catalogData, exemplar),
         categories: storedItem.categories,
         place: storedItem.place,
