@@ -294,7 +294,10 @@ bootstrap.
 | `SMTP_LOCAL_NAME`  | no               | —                | HELO/EHLO local name; leave empty unless the relay requires a specific one.                                     |
 | `SENDER_ADDRESS`   | no               | (admin-UI value) | Optional override of the `From` address; only applied when set.                                                 |
 | `SENDER_NAME`      | no               | (admin-UI value) | Optional override of the sender display name; only applied when set.                                            |
-| `APP_URL`          | no               | (admin-UI value) | Optional override of the app URL used to build verification/reset/email-change links; only applied when set.    |
+| `APP_URL`          | no               | (admin-UI value) | Optional override of the app URL used to build verification/reset/email-change links; only applied when set. **#607: this is also the backend origin (`utils/urls.js` → `assetBase()`) — the frontend origin for user-facing links is `FRONTEND_URL` / `siteBase()`.** |
+| `UNSUBSCRIBE_SECRET` | no             | (derived)        | #607: HMAC secret for the one-click digest-unsubscribe tokens. Empty derives a fallback from the `users` auth-token secret; set an explicit value in production (`openssl rand -hex 32`) so rotating that secret doesn't invalidate already-sent unsubscribe links. |
+| `DIGEST_SENDER_ADDRESS` / `DIGEST_SENDER_NAME` | no | — | #607: optional own sender identity for the weekly digest. Empty = same sender as transactional mail. **Do not set before SPF/DKIM/DMARC are configured for that address** — see "Zustellbarkeit (#607)" below. |
+| `DIGEST_PACING_MS` / `DIGEST_BATCH_SIZE` / `DIGEST_BATCH_PAUSE_MS` | no | `200` / `50` / `5000` | #607: anti-burst pacing for the weekly digest send loop; `0` disables the corresponding pause. |
 
 The TLS rule mirrors the usual convention: **`SMTP_TLS=true` for implicit TLS on 465**,
 **`SMTP_TLS=false` for STARTTLS on 587**. Set `SMTP_PORT` to match.
@@ -337,6 +340,33 @@ APP_URL=http://127.0.0.1:8090 ./pocketbase serve --http=0.0.0.0:8090
 In production set these via the service/deployment config (systemd `EnvironmentFile=` /
 `Environment=`, or your container's env), not on the command line.
 
+### Zustellbarkeit (#607)
+
+On top of basic SMTP delivery, `pb_hooks/services/mail.js` builds every notification email with a
+few spam-filter-friendly properties baked in:
+
+- a `text/plain` alternative (multipart/alternative) generated from the HTML content via
+  `pb_hooks/utils/htmlToText.js`, so the mail is never HTML-only;
+- `Auto-Submitted: auto-generated` + `X-Auto-Response-Suppress` on every send;
+- `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058) on the
+  weekly digest only — see `pb_hooks/unsubscribe.pb.js` / `services/unsubscribe.js` for the
+  stateless HMAC-token one-click flow. Transactional mail (new-message, retention notices)
+  deliberately carries **no** unsubscribe header — see `.claude/rules/retention.md`;
+  `Precedence: bulk` is likewise digest-only;
+  the digest also paces its sends (`DIGEST_PACING_MS` / `DIGEST_BATCH_SIZE` /
+  `DIGEST_BATCH_PAUSE_MS`) as a courtesy to the receiving mail server;
+- correct absolute links: `utils/urls.js` exposes `assetBase()` (this backend's own origin —
+  `pb_public` assets, `/api/files/…`, the unsubscribe endpoint) and `siteBase()` (the SvelteKit
+  frontend origin, `FRONTEND_URL`) as two separate bases, so a link never ends up pointing at the
+  wrong host (the `APP_URL`/`{APP_URL}` value is the **backend** origin, per the #447 decision —
+  see the `APP_URL` row above).
+
+None of this replaces actual DNS-level deliverability work (SPF/DKIM/DMARC, PTR/rDNS, mail-tester
+verification) — that live-diagnosis checklist, plus the env-var reference and rollout notes for
+`DIGEST_SENDER_ADDRESS`, lives in the frontend repo's
+[`docs/operations/mail-deliverability.md`](https://github.com/share-open-sharing-infrastructure/share-mvp/blob/main/docs/operations/mail-deliverability.md)
+runbook (this repo has no `docs/` folder of its own).
+
 ### Who receives notification emails
 
 For the new-message notification (`pb_hooks/notification.pb.js`), an email is sent unless:
@@ -345,6 +375,11 @@ For the new-message notification (`pb_hooks/notification.pb.js`), an email is se
   preferences record exists), or
 - the recipient is currently throttled: at most one notification email per recipient per
   `MAIL_THROTTLE_MINUTES` window (default `15`).
+
+The weekly digest (`pb_hooks/jobs/digest.js`) additionally respects its own
+`user_preferences.digestEmails` opt-out (default opted-in when no row exists) — set independently
+of `emailNotifications` via the digest's one-click unsubscribe link, so unsubscribing from the
+digest never silences transactional mail. A recipient is skipped if **either** field is `false`.
 
 In-app and push notifications are independent of these email rules.
 

@@ -10,6 +10,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { rmSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { startSink } from './smtpSink.mjs'
 
 const PORT = 8091 // separate from the dev instance (8090)
 const DIR = './pb_test_data' // throwaway; never the real pb_data
@@ -89,6 +90,48 @@ export async function startPB(extraEnv = {}) {
 	adminToken = auth.json.token
 
 	return proc
+}
+
+/**
+ * #607 mail-deliverability tests (digest.test.mjs, mail-deliverability.test.mjs,
+ * unsubscribe.test.mjs, ...) all need a real SMTP sink PLUS the same ~10-line env block: point
+ * SMTP at the sink (no AUTH/STARTTLS — see smtpSink.mjs), DRY_MODE off, and the digest pacing
+ * vars zeroed so a run is instant. Extracted here (#607 review S4) so a new pacing/env var only
+ * needs to be added in one place instead of drifting across every test file that copied it.
+ *
+ * @param {Record<string, string>} extraEnv - Merged over the defaults (e.g. FRONTEND_URL/APP_URL,
+ *   DIGEST_TEST_ROUTE, UNSUBSCRIBE_SECRET) — passed through to startPB() untouched, so an
+ *   explicit `SMTP_HOST`/`SMTP_PORT` here would still win over the sink if ever needed.
+ * @returns {Promise<{pb: import('node:child_process').ChildProcess, sink: Awaited<ReturnType<typeof startSink>>}>}
+ */
+export async function startPbWithSmtpSink(extraEnv = {}) {
+	const sink = await startSink()
+	const pb = await startPB({
+		SMTP_HOST: '127.0.0.1',
+		SMTP_PORT: String(sink.port),
+		SMTP_USERNAME: '',
+		SMTP_PASSWORD: '',
+		SMTP_TLS: 'false',
+		DRY_MODE: 'false',
+		DIGEST_PACING_MS: '0',
+		DIGEST_BATCH_SIZE: '0',
+		DIGEST_BATCH_PAUSE_MS: '0',
+		...extraEnv,
+	})
+	return { pb, sink }
+}
+
+/**
+ * Extract a header's value from a raw MIME message, joining any folded continuation lines (a
+ * header value that wraps onto subsequent lines starting with a space/tab, per RFC 5322 §2.2.3)
+ * into one string. #607 review S4: this is the one shared `headerValue()` — it used to be defined
+ * twice (mail-deliverability.test.mjs and unsubscribe.test.mjs), and the unsubscribe.test.mjs copy
+ * didn't handle folded lines at all.
+ */
+export function headerValue(raw, name) {
+	const re = new RegExp(`^${name}:\\s*(.+(?:\\r\\n[ \\t].+)*)`, 'im')
+	const m = raw.match(re)
+	return m ? m[1].replace(/\r\n[ \t]/g, ' ').trim() : null
 }
 
 /**
