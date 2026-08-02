@@ -5,7 +5,17 @@
 // schedules can't be fired directly), same pattern as retention-warning.test.mjs.
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { startPbWithSmtpSink, stopPB, makeUser, api, adminAuth, headerValue } from './harness.mjs'
+import {
+	startPbWithSmtpSink,
+	stopPB,
+	makeUser,
+	api,
+	adminAuth,
+	headerValue,
+	extractPart,
+	decodeQuotedPrintable,
+	waitForMessageCount,
+} from './harness.mjs'
 
 let pb, sink, alice, bob
 
@@ -35,42 +45,6 @@ after(() => {
 	sink.stop()
 })
 
-/** Poll sink.messages until at least `min` have arrived (mail send happens in-process during the
- * triggering request, but poll instead of assuming synchronous ordering across the network). */
-async function waitForMessageCount(min, timeoutMs = 5000) {
-	const start = Date.now()
-	while (sink.messages.length < min) {
-		if (Date.now() - start > timeoutMs) {
-			throw new Error(`timed out waiting for ${min} sink message(s), got ${sink.messages.length}`)
-		}
-		await new Promise((r) => setTimeout(r, 50))
-	}
-}
-
-/** Extract the body of the first MIME part whose Content-Type starts with `mime` (best-effort:
- * relies on the mailer always separating a part's own headers from its body with a blank line,
- * and delimiting parts with a "\r\n--boundary" line — true for every message this mailer builds). */
-function extractPart(raw, mime) {
-	const idx = raw.indexOf(`Content-Type: ${mime}`)
-	if (idx === -1) return null
-	const headerEnd = raw.indexOf('\r\n\r\n', idx)
-	if (headerEnd === -1) return null
-	const bodyStart = headerEnd + 4
-	const nextBoundary = raw.indexOf('\r\n--', bodyStart)
-	return raw.slice(bodyStart, nextBoundary === -1 ? raw.length : nextBoundary)
-}
-
-/**
- * Minimal quoted-printable decoder for asserting on URL substrings: the mailer wraps encoded
- * lines at ~76 chars with a soft "=\r\n" break, which can otherwise split a URL mid-string and
- * make a plain substring check flaky. Only used for positive presence checks — the "must NOT
- * contain allerleih.org" checks stay on the raw text (a false negative there would only hide a
- * regression, never fail a passing run).
- */
-function decodeQuotedPrintable(str) {
-	return str.replace(/=\r\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-}
-
 test('new-message mail: multipart/alternative, non-empty text/plain, no List-Unsubscribe, transactional sender, Auto-Submitted', async () => {
 	const before = sink.messages.length
 	const msg = await api('POST', '/api/collections/messages/records', adminAuth(), {
@@ -79,7 +53,7 @@ test('new-message mail: multipart/alternative, non-empty text/plain, no List-Uns
 		messageContent: 'Hallo!',
 	})
 	assert.equal(msg.status, 200, JSON.stringify(msg.json))
-	await waitForMessageCount(before + 1)
+	await waitForMessageCount(sink, before + 1)
 
 	const raw = sink.messages[sink.messages.length - 1]
 	assert.match(raw, /Content-Type: multipart\/alternative/i)
@@ -112,7 +86,7 @@ test('weekly digest mail: multipart/alternative, List-Unsubscribe (One-Click), P
 	const run = await api('POST', '/api/_test/run-digest', adminAuth(), {})
 	assert.equal(run.status, 200, JSON.stringify(run.json))
 	assert.ok(run.json.sent >= 1, 'at least alice should receive a digest for bobs new public item')
-	await waitForMessageCount(before + run.json.sent)
+	await waitForMessageCount(sink, before + run.json.sent)
 
 	// Find the digest mail among whatever was sent in this run (alice is the only guaranteed
 	// recipient — bob owns the only new item, so it never appears in bob's own digest).
@@ -144,7 +118,7 @@ test('retention inactivity-warning mail: no List-Unsubscribe, transactional send
 	})
 	assert.equal(run.status, 200, JSON.stringify(run.json))
 	assert.ok(run.json.warned >= 1)
-	await waitForMessageCount(before + 1)
+	await waitForMessageCount(sink, before + 1)
 
 	const raw = sink.messages[sink.messages.length - 1]
 	assert.ok(!/List-Unsubscribe/i.test(raw), 'retention mail must not offer List-Unsubscribe (see #607 plan 2.9)')

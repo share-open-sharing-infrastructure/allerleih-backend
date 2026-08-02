@@ -135,6 +135,51 @@ export function headerValue(raw, name) {
 }
 
 /**
+ * Extract the body of the first MIME part whose Content-Type starts with `mime` (best-effort:
+ * relies on the mailer always separating a part's own headers from its body with a blank line,
+ * and delimiting parts with a "\r\n--boundary" line — true for every message this mailer builds).
+ * #622: lifted out of mail-deliverability.test.mjs (mirrors #607's `headerValue` extraction) so
+ * digest-images.test.mjs can decode the digest HTML part too, without duplicating it.
+ */
+export function extractPart(raw, mime) {
+	const idx = raw.indexOf(`Content-Type: ${mime}`)
+	if (idx === -1) return null
+	const headerEnd = raw.indexOf('\r\n\r\n', idx)
+	if (headerEnd === -1) return null
+	const bodyStart = headerEnd + 4
+	const nextBoundary = raw.indexOf('\r\n--', bodyStart)
+	return raw.slice(bodyStart, nextBoundary === -1 ? raw.length : nextBoundary)
+}
+
+/**
+ * Minimal quoted-printable decoder for asserting on URL substrings: the mailer wraps encoded
+ * lines at ~76 chars with a soft "=\r\n" break, which can otherwise split a URL mid-string and
+ * make a plain substring check flaky. Only used for positive presence checks — a "must NOT
+ * contain X" check stays on the raw text (a false negative there would only hide a regression,
+ * never fail a passing run). #622: lifted out of mail-deliverability.test.mjs alongside extractPart.
+ */
+export function decodeQuotedPrintable(str) {
+	return str.replace(/=\r\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+}
+
+/**
+ * Poll `sink.messages` until at least `min` have arrived (mail send happens in-process during the
+ * triggering request, but poll instead of assuming synchronous ordering across the network).
+ * #622: lifted out of mail-deliverability.test.mjs — same "second consumer" rationale as
+ * extractPart/decodeQuotedPrintable above (digest-images.test.mjs needs it too). Takes `sink`
+ * explicitly since, unlike the test file it came from, this module has no local to close over.
+ */
+export async function waitForMessageCount(sink, min, timeoutMs = 5000) {
+	const start = Date.now()
+	while (sink.messages.length < min) {
+		if (Date.now() - start > timeoutMs) {
+			throw new Error(`timed out waiting for ${min} sink message(s), got ${sink.messages.length}`)
+		}
+		await new Promise((r) => setTimeout(r, 50))
+	}
+}
+
+/**
  * The seeded superuser token, for operations that must bypass collection rules
  * in test setup/teardown (e.g. deleting a user account to exercise cascades).
  */

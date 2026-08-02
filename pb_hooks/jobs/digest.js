@@ -71,15 +71,25 @@ function renderItemList(asset, site, items, max, ownerNames, allowUploadedImages
         const ownerName = ownerNames[ownerId] || ''
 
         // Resolve image URL:
-        // - Uploaded files are behind auth, so only include them for public items
-        // - externalImgUrl is always accessible (external host, no auth)
+        // - Files are served via the `items_searchable` view, NOT `items_public` — the latter's
+        //   `image` column is a masking CASE expression (1781900049_items_public_mask_grouped.js)
+        //   that PocketBase types as `json`, so it never serves a file at all (404, #622).
+        // - PocketBase's file-serving endpoint enforces only the field's `protected` flag (false
+        //   here), NOT the collection's viewRule — so this URL works for an unauthenticated mail
+        //   client, with no token and no expiry, exactly as a mail image needs to.
+        // - `allowUploadedImages` (computed by the caller) is therefore the ONLY barrier: it is
+        //   true only for genuinely public items (trusteesOnly = false, no groups — the auth-free
+        //   first branch of the items_searchable view rule), so trustees-only/group items always
+        //   fall through to externalImgUrl instead, never an uploaded-file URL.
+        // - `?thumb=0x300` is whitelisted in pb_migrations/1784402877_image_thumbs.js and matches
+        //   the frontend's own request shape ($lib/utils/utils.ts#itemImageUrl in share-mvp).
+        // - externalImgUrl is always accessible (external host, no auth) regardless of visibility.
         let imgUrl = ''
         const imageFiles = item.get('image') || []
         const images = Array.isArray(imageFiles) ? imageFiles : [imageFiles]
         const externalImg = item.get('externalImgUrl')
         if (allowUploadedImages && images.length > 0 && images[0]) {
-            // #607 B1: uploaded files are served by the BACKEND, not the frontend.
-            imgUrl = asset + '/api/files/items_public/' + item.id + '/' + images[0]
+            imgUrl = asset + '/api/files/items_searchable/' + item.id + '/' + images[0] + '?thumb=0x300'
         } else if (externalImg) {
             imgUrl = externalImg
         }
@@ -92,7 +102,11 @@ function renderItemList(asset, site, items, max, ownerNames, allowUploadedImages
                 '<a href="' +
                 itemUrl +
                 '"><img src="' +
-                imgUrl +
+                // #622: escape — the items_searchable branch above is a PocketBase-sanitised
+                // filename, but externalImgUrl comes from the CSV import / partner integrations
+                // (integrations/leihbackend.js, winbiap.js) and may contain a `"` that would
+                // otherwise break out of the attribute and inject markup into every recipient's digest.
+                escapeHtml(imgUrl) +
                 '" width="64" height="64" style="width: 64px; height: 64px; object-fit: cover; border-radius: 8px; display: block;" alt="' +
                 escapeHtml(name) +
                 '"></a>'
@@ -341,8 +355,10 @@ function runWeeklyDigest(app) {
         }
 
         // Render item lists as HTML (max 5 per section)
-        // Only public items get uploaded-file thumbnails (no auth required);
-        // trusted/group items only show externalImgUrl (auth-gated files would 403 in email clients)
+        // Only public items get uploaded-file thumbnails; trusted/group items show externalImgUrl
+        // only. The file endpoint itself checks no auth at all (see the image-resolution doc
+        // comment above) — allowUploadedImages here is the ONLY gate between a restricted item's
+        // image and this mail.
         const trustedHtml = renderItemList(asset, site, trustedItems, 5, ownerNames, false)
         const groupHtml = renderItemList(asset, site, groupItems, 5, ownerNames, false)
         const publicHtml = renderItemList(asset, site, publicItems, 5, ownerNames, true)
