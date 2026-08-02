@@ -146,6 +146,10 @@ browsing.** `items_public` returns `NULL` for `name`/`description`/`image` of an
 "restricted item exists" without leaking content). `users_public` omits email and raw coordinates.
 When you change item/user visibility, **update the corresponding view migration** or you will leak
 restricted data to guests. `items_searchable` (auth-only) *filters* rows instead of masking them.
+Both item views additionally exclude rows whose owner is `deleted`
+(`WHERE COALESCE(users.deleted, 0) = 0`) so an anonymized account's conversation-retained items
+stay out of the catalogue and search — a **standing invariant every `viewQuery` rewrite must
+carry over** (#624; guarded by `tests/deleted-owner-items.test.mjs`).
 
 ## Backend-only issues
 
