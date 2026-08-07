@@ -433,7 +433,12 @@ A SQL view (`items_public`, `items_searchable`) returns **only the columns in it
 SELECT**. To expose a new column, change the `viewQuery` and **re-save** the collection —
 PocketBase re-derives the view's field list from the new SELECT automatically (no manual field
 definitions needed). Prefer a **string-append/replace** over rewriting the whole query, so the
-migration survives other branches' changes to the same view (e.g. an appended `WHERE`):
+migration survives other branches' changes to the same view — and, crucially, the standing
+`WHERE COALESCE(users.deleted, 0) = 0` clause that keeps an anonymized owner's retained items out
+of `items_public` and `items_searchable`. Assigning a whole new SELECT drops that clause silently:
+four migrations did exactly that (#624) — `1781900045` on `items_searchable`, then `1781900049`,
+`1782750000` and `1783800001` on `items_public` — so each view lost the clause and later rewrites
+kept re-shipping it missing. `tests/deleted-owner-items.test.mjs` now fails if it goes missing:
 
 ```js
 migrate(
