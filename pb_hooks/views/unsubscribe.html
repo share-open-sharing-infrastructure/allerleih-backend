@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{if eq .STATE "confirm"}}Wochen-R&uuml;ckblick abbestellen? &mdash; AllerLeih{{else if eq .STATE "done"}}Erledigt &mdash; AllerLeih{{else if eq .STATE "unavailable"}}Abmelden nicht verf&uuml;gbar &mdash; AllerLeih{{else}}Link ung&uuml;ltig &mdash; AllerLeih{{end}}</title>
+    <style>
+        body { font-family: 'Work Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 0; background: #F8F3DE; color: #1F1F1F; }
+        .wrapper { padding: 48px 16px; }
+        .card { max-width: 480px; margin: 0 auto; background: #FDFBF6; border-radius: 16px; border: 1px solid #EBE6D9; padding: 32px 24px; text-align: center; }
+        h1 { font-size: 18px; margin: 0 0 16px 0; }
+        p { line-height: 1.6; color: #3A3A3A; }
+        button { display: inline-block; margin-top: 16px; padding: 10px 20px; background-color: #9BAEED; color: #000000; border: 1px solid #000000; border-radius: 50px; font-weight: bold; font-size: 14px; font-family: inherit; cursor: pointer; }
+        a.link { color: #6B6B6B; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <main class="card">
+            {{if eq .STATE "confirm"}}
+                <h1>Wochen-R&uuml;ckblick abbestellen?</h1>
+                <p>M&ouml;chtest du keine w&ouml;chentliche Zusammenfassung neuer Gegenst&auml;nde per E-Mail mehr erhalten?</p>
+                <form method="post" action="">
+                    <button type="submit">Ja, abbestellen</button>
+                </form>
+            {{else if eq .STATE "done"}}
+                <h1>Erledigt</h1>
+                <p>Du erh&auml;ltst keinen Wochen-R&uuml;ckblick per E-Mail mehr.</p>
+                {{if .PREFS_URL}}<p><a class="link" href="{{.PREFS_URL}}">Benachrichtigungen verwalten</a></p>{{end}}
+            {{else if eq .STATE "unavailable"}}
+                <h1>Abmelden momentan nicht verf&uuml;gbar</h1>
+                <p>Bitte versuche es sp&auml;ter erneut.</p>
+            {{else}}
+                <h1>Link ung&uuml;ltig</h1>
+                <p>Dieser Abmeldelink ist ung&uuml;ltig oder nicht mehr aktuell.</p>
+                {{if .PREFS_URL}}<p><a class="link" href="{{.PREFS_URL}}">Benachrichtigungen verwalten</a></p>{{end}}
+            {{end}}
+        </main>
+    </div>
+</body>
+</html>

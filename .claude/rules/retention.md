@@ -23,3 +23,12 @@ serialized. The open-loan skip notice is deduped via `retentionNotifiedAt` (cool
 is sent once per inactivity cycle via `deletionWarnedAt` (a stamp older than the effective last
 activity belongs to a previous cycle, so a login re-arms the warning without touching the auth
 hook; a send failure skips the stamp and retries the next night).
+
+**#607 mail deliverability:** all three retention mails (`retention_skipped_user`,
+`retention_skipped_admin`, `retention_warning_user`) deliberately carry **no** `List-Unsubscribe`
+header and use the transactional sender identity (`SENDER_ADDRESS`), never the digest's — they are
+DSE-mandated notices about the recipient's *own account*, not bulk/marketing mail, and offering an
+unsubscribe promise the platform legally cannot honor would be worse than no header at all. This
+is the `sendNotificationEmail` default (`kind` omitted, no `unsubscribeUrl`); see `services/mail.js`
+and the sibling weekly-digest job (`jobs/digest.js`), which is the one call site that opts into
+`kind: 'bulk'` + a real unsubscribe link.

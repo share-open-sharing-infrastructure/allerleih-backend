@@ -118,6 +118,34 @@ const SENDER_NAME = $os.getenv('SENDER_NAME') || ''
  */
 const APP_URL = $os.getenv('APP_URL') || FRONTEND_URL
 
+/**
+ * #607 mail deliverability — optional own sender identity for bulk mail (the weekly digest).
+ * Empty (default) = behaves exactly like today (uses the transactional SENDER_ADDRESS/NAME).
+ * DIGEST_SENDER_NAME alone (without DIGEST_SENDER_ADDRESS) is deliberately NOT enough to change
+ * the sender — see services/mail.js `senderFor()` — or name and domain would end up mismatched.
+ * WARNING: only set DIGEST_SENDER_ADDRESS once SPF/DKIM/DMARC are configured for that address —
+ * see docs/operations/mail-deliverability.md (frontend repo) before flipping this in production.
+ */
+const DIGEST_SENDER_ADDRESS = $os.getenv('DIGEST_SENDER_ADDRESS') || ''
+const DIGEST_SENDER_NAME = $os.getenv('DIGEST_SENDER_NAME') || ''
+
+/**
+ * HMAC secret for the stateless one-click digest-unsubscribe tokens (services/unsubscribe.js).
+ * Empty = derive a fallback from the `users` collection's authToken secret (logged, never the
+ * value itself). Set an explicit UNSUBSCRIBE_SECRET in production so rotating the users auth
+ * token secret (e.g. a forced logout-everywhere) doesn't also invalidate every unsubscribe link
+ * already sent.
+ */
+const UNSUBSCRIBE_SECRET = $os.getenv('UNSUBSCRIBE_SECRET') || ''
+
+/**
+ * Weekly-digest send pacing (anti-burst courtesy pause for the receiving mail server).
+ * 0 = no pacing. See jobs/digest.js — sleep()s between sends and pauses every DIGEST_BATCH_SIZE.
+ */
+const DIGEST_PACING_MS = intEnv('DIGEST_PACING_MS', 200)
+const DIGEST_BATCH_SIZE = intEnv('DIGEST_BATCH_SIZE', 50)
+const DIGEST_BATCH_PAUSE_MS = intEnv('DIGEST_BATCH_PAUSE_MS', 5000)
+
 module.exports = {
     LOG_LEVEL,
     VAPID_PUBLIC_KEY,
@@ -148,4 +176,10 @@ module.exports = {
     SENDER_ADDRESS,
     SENDER_NAME,
     APP_URL,
+    DIGEST_SENDER_ADDRESS,
+    DIGEST_SENDER_NAME,
+    UNSUBSCRIBE_SECRET,
+    DIGEST_PACING_MS,
+    DIGEST_BATCH_SIZE,
+    DIGEST_BATCH_PAUSE_MS,
 }

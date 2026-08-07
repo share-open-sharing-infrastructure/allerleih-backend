@@ -26,3 +26,6 @@ pocketbase.exe
 
 # Personal local overrides (see CLAUDE.md)
 CLAUDE.local.md
+
+# Throwaway data dir from local diagnostic PocketBase runs
+pb_diag_data/

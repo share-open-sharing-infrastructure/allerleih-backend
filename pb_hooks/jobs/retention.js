@@ -19,6 +19,7 @@
 const { findBlockingLoans, anonymizeAccount } = require(`${__hooks}/services/account.js`)
 const { sendNotificationEmail } = require(`${__hooks}/services/mail.js`)
 const { now, daysAgoIso, shiftDaysIso, monthsAfterIso } = require(`${__hooks}/utils/common.js`)
+const { siteBase } = require(`${__hooks}/utils/urls.js`)
 const {
     DRY_MODE,
     ADMIN_NOTIFY_EMAIL,
@@ -208,7 +209,7 @@ function warnInactiveAccounts(app, warnCutoffIso) {
                             USERNAME: user.get('username'),
                             DELETION_DATE: deletionDate,
                             MONTHS: INACTIVE_MONTHS,
-                            APP_URL: app.settings().meta.appURL || '',
+                            SITE_URL: siteBase(app),
                         })
                     sendNotificationEmail(app, {
                         to: user.email(),

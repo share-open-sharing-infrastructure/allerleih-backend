@@ -25,8 +25,12 @@ npm test                                 # node --test, runs tests/*.test.mjs se
   DB + uploads (not in the repo); delete it to reset to a clean migrated state.
 - **Tests** spin up a *throwaway* PocketBase on a separate port against a throwaway data dir,
   apply all migrations + hooks, and run end-to-end via HTTP. Helpers in `tests/harness.mjs`
-  (`startPB`, `stopPB`, `api`, `makeUser`, `adminAuth`). They run serially
-  (`--test-concurrency=1`) because each owns the server.
+  (`startPB`, `stopPB`, `api`, `makeUser`, `adminAuth`, plus the #607 mail-deliverability helpers
+  `startPbWithSmtpSink` — `startPB()` pre-wired to a real SMTP sink, see `tests/smtpSink.mjs` —
+  `headerValue`, a fold-aware raw-MIME header extractor, `extractPart`/`decodeQuotedPrintable`, a
+  MIME-part extractor and quoted-printable decoder for asserting on a mail's HTML/text body, and
+  `waitForMessageCount`, an adaptive poll that waits for a sink to reach a given message count).
+  They run serially (`--test-concurrency=1`) because each owns the server.
 - For personal local settings (custom ports, local superuser creds) that shouldn't be shared with
   the team, use a gitignored `CLAUDE.local.md` at the repo root — it loads alongside this file.
 
@@ -57,11 +61,16 @@ pb_hooks/                    # custom server logic (auto-loaded JS), one file pe
 │                                 #   winbiap.js, urlGuard.js, lock.js, types.js
 ├── account.pb.js                 # DELETE /api/account + export, deleted-login block, email normalization (#557)
 ├── retention.pb.js               # GDPR retention cron jobs (#461) + guarded test route
+├── digest.pb.js                  # #607: weekly_digest cron registration + guarded test route (jobs/digest.js)
+├── unsubscribe.pb.js             # #607: GET/POST /api/unsubscribe/{purpose}/{token} — one-click digest unsubscribe
 ├── services/                     # shared business logic: account.js, group.js, legal.js, notification.js,
-│                                 #   mail.js, syncConfig.js (used only by the historical backfill migration)
-├── utils/                        # common.js, email.js (normalizeEmail, #557), db.js
-├── views/                        # email HTML templates (layout.html + mail/)
-├── jobs/                         # cron job bodies: retention.js
+│                                 #   mail.js, syncConfig.js (used only by the historical backfill migration),
+│                                 #   unsubscribe.js (#607: HMAC token verify/apply + the confirmation page render)
+├── utils/                        # common.js, email.js (normalizeEmail, #557), db.js, urls.js (#607: assetBase/
+│                                 #   siteBase — backend vs. frontend origin), htmlToText.js (#607: mail plaintext)
+├── views/                        # email HTML templates (layout.html + mail/); unsubscribe.html (#607: the
+│                                 #   standalone confirmation page, NOT a mail template)
+├── jobs/                         # cron job bodies: retention.js, digest.js (#607, extracted from digest.pb.js)
 ├── routes/                       # placeholder — routes currently live in *.pb.js
 pb_migrations/               # <timestamp>_<description>.js — schema, applied in filename order
 pb_public/                   # static assets served by PocketBase
@@ -71,12 +80,17 @@ pb_data/                     # live DB + uploads (gitignored, created on first s
 
 ## CRITICAL: hook files run in isolated contexts — `require()` inside the handler
 
-Each `pb_hooks/*.pb.js` handler runs in its own isolated JS context. **Top-level imports are
-NOT visible inside `routerAdd`/`onRecord*` callbacks.** You must `require()` shared code *inside*
-the handler, using the `__hooks` magic path:
+Each `pb_hooks/*.pb.js` handler runs in its own isolated JS context. **NOTHING declared at a
+`*.pb.js` file's top level — not `require()` results, and not a plain `const`/`function` you wrote
+yourself in that same file — is reliably visible inside a `routerAdd`/`onRecord*`/`cronAdd`
+callback registered there.** Confirmed empirically while building #607's `unsubscribe.pb.js`: a
+top-level `const PURPOSES = [...]` in that file threw `ReferenceError: PURPOSES is not defined`
+the moment a registered `routerAdd` callback referenced it — this is not just a require() quirk,
+it applies to any top-level declaration. `require()` shared code, and define any other helper,
+*inside* the handler, using the `__hooks` magic path:
 
 ```javascript
-// CORRECT — require inside the handler
+// CORRECT — require AND any shared constants/helpers declared inside the handler
 onRecordAfterCreateSuccess((e) => {
   const { createNotification } = require(`${__hooks}/services/notification.js`)
   const { DRY_MODE } = require(`${__hooks}/constants.js`)
@@ -84,9 +98,17 @@ onRecordAfterCreateSuccess((e) => {
   e.next()
 }, 'messages')
 
-// WRONG — top-level require is not in scope when the handler fires
+// WRONG — neither a top-level require() nor a top-level const/function is in scope when the
+// handler fires, even though both live in the very same file as the registration call below.
 const { createNotification } = require(`${__hooks}/services/notification.js`)  // ❌
+const SOME_ALLOWLIST = ['a', 'b']  // ❌ — also not visible inside the callback below
+routerAdd('GET', '/api/example', (e) => { /* SOME_ALLOWLIST is undefined here */ })
 ```
+
+(Plain helper functions/constants declared at the top level of a `services/`/`utils/`/`jobs/`
+module — i.e. a file that is itself `require()`'d fresh inside a handler, not a `*.pb.js` hook
+file — are unaffected and work exactly like normal CommonJS: `services/mail.js`, `services/account.js`,
+`jobs/retention.js` and `jobs/digest.js` all rely on this and it works fine.)
 
 Shared logic goes in `services/` (business logic) or `utils/` (pure helpers) and is exported with
 `module.exports = { ... }`.
@@ -146,6 +168,14 @@ browsing.** `items_public` returns `NULL` for `name`/`description`/`image` of an
 "restricted item exists" without leaking content). `users_public` omits email and raw coordinates.
 When you change item/user visibility, **update the corresponding view migration** or you will leak
 restricted data to guests. `items_searchable` (auth-only) *filters* rows instead of masking them.
+**`items_public.image` masks via a SQL `CASE` expression, which PocketBase types as a `json`
+column — not a `file` column — so it can never serve a file at all (404; this was #622).** Item
+files are always served through `/api/files/items_searchable/{id}/{filename}` (a real, cloned
+`file` field), never through `items_public`, regardless of the item's visibility. PocketBase's
+file-serving endpoint does not evaluate a collection's view rule — only the field's `protected`
+flag (`false` for both views) — so this URL is reachable unauthenticated with no token and no
+expiry; the barrier against leaking a restricted item's image is at the call site (e.g. the weekly
+digest's `allowUploadedImages`, `pb_hooks/jobs/digest.js`), not the server.
 Both item views additionally exclude rows whose owner is `deleted`
 (`WHERE COALESCE(users.deleted, 0) = 0`) so an anonymized account's conversation-retained items
 stay out of the catalogue and search — a **standing invariant every `viewQuery` rewrite must
