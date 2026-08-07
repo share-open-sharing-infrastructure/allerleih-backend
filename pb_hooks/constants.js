@@ -36,23 +36,25 @@ const DRY_MODE = $os.getenv('DRY_MODE') === 'true'
 const MAIL_THROTTLE_MINUTES = intEnv('MAIL_THROTTLE_MINUTES', 15)
 
 /**
- * Integration sync cron jobs — the backend periodically POSTs to the SvelteKit
- * frontend's bearer-protected /api/sync and /api/refresh endpoints, which pull
- * institutional catalogues from their external lending software.
+ * SvelteKit frontend origin (no trailing slash), e.g. "https://allerleih.org".
+ * Kept for the #447 auth-mail links (host of the `users` verification/reset URLs) and as the
+ * `APP_URL` fallback — see auth_mail_templates.pb.js + mail_config.pb.js. It is NO LONGER used for
+ * integration sync (#487 Phase 3 moved sync/refresh + the CSV write path fully into the backend).
  */
-/** SvelteKit frontend origin (no trailing slash), e.g. "https://allerleih.org".
- * Must be https for non-local deployments — SYNC_SECRET travels as a Bearer header
- * and would go out in cleartext over cross-host http (startup warning enforces this). */
 const FRONTEND_URL = ($os.getenv('FRONTEND_URL') || '').replace(/\/+$/, '')
-/** Bearer token for /api/sync + /api/refresh — must equal the frontend's SYNC_SECRET */
-const SYNC_SECRET = $os.getenv('SYNC_SECRET') || ''
-/** Cron expression for the full catalogue pull (POST /api/sync); empty = job disabled */
+/** Cron expression for the full catalogue pull; empty = job disabled.
+ * Runs LOCALLY in the backend (integrations/sync.js) — no HTTP call, only a valid expression. */
 const SYNC_CRON = $os.getenv('SYNC_CRON') || ''
-/** Cron expression for the per-item refresh (POST /api/refresh); empty = job disabled */
+/** Cron expression for the per-item refresh; empty = job disabled.
+ * Runs LOCALLY in the backend (integrations/refresh.js) — no HTTP call, only a valid expression. */
 const REFRESH_CRON = $os.getenv('REFRESH_CRON') || ''
-/** HTTP timeout for the sync/refresh calls — a full sync can take minutes (the frontend
- * batches creates 15-at-a-time with 5.5s pauses to stay under PocketBase rate limits) */
-const SYNC_TIMEOUT_SECONDS = intEnv('SYNC_TIMEOUT_SECONDS', 540)
+/**
+ * Allow http:// and private/loopback integration base URLs, bypassing the SSRF guard in
+ * pb_hooks/integrations/urlGuard.js. Applies to BOTH the refresh (fetchItemById) and, as of #487
+ * Phase 2, the full-sync bulk feed (fetchAllItems). Local dev / integration tests only (e.g.
+ * loopback stub servers) — NEVER set in production. Backend replacement for the Vite `dev` flag.
+ */
+const INTEGRATION_ALLOW_INSECURE_URL = $os.getenv('INTEGRATION_ALLOW_INSECURE_URL') === 'true'
 
 /**
  * GDPR data-retention windows (#461) — enforced by the nightly jobs in
@@ -63,6 +65,13 @@ const RETENTION_INACTIVE_MONTHS = parseInt($os.getenv('RETENTION_INACTIVE_MONTHS
 const RETENTION_MESSAGES_MONTHS = parseInt($os.getenv('RETENTION_MESSAGES_MONTHS') || '6')
 const RETENTION_NOTIFICATIONS_DAYS = parseInt($os.getenv('RETENTION_NOTIFICATIONS_DAYS') || '90')
 const RETENTION_FEEDBACK_MONTHS = parseInt($os.getenv('RETENTION_FEEDBACK_MONTHS') || '6')
+
+/**
+ * How many days before the inactive-account deletion threshold the advance-warning
+ * email is sent (once per inactivity cycle; logging in re-arms it). 0 disables the
+ * warning job. Runs independently of the deletion job — it never delays a deletion.
+ */
+const RETENTION_INACTIVE_WARN_DAYS = parseInt($os.getenv('RETENTION_INACTIVE_WARN_DAYS') || '30')
 
 /**
  * Where to notify a platform admin when an inactive account is *skipped* because it
@@ -99,7 +108,43 @@ const SMTP_AUTH_METHOD = $os.getenv('SMTP_AUTH_METHOD') || 'PLAIN'
 const SMTP_LOCAL_NAME = $os.getenv('SMTP_LOCAL_NAME') || ''
 const SENDER_ADDRESS = $os.getenv('SENDER_ADDRESS') || ''
 const SENDER_NAME = $os.getenv('SENDER_NAME') || ''
-const APP_URL = $os.getenv('APP_URL') || ''
+/**
+ * Application URL used as the documented fallback host for the `{APP_URL}` placeholder in the
+ * `users` auth-mail templates (#447). Defaults to FRONTEND_URL so that — when no explicit APP_URL
+ * is set — those user-facing links still point at the SvelteKit frontend rather than the backend.
+ * NOTE: `mail_config.pb.js` only writes `settings.meta.appURL` from an EXPLICITLY-set APP_URL env
+ * var, never from this FRONTEND_URL fallback — otherwise the `_superusers` admin links (which rely
+ * on appURL pointing at the backend admin UI) would break (see #447 decision).
+ */
+const APP_URL = $os.getenv('APP_URL') || FRONTEND_URL
+
+/**
+ * #607 mail deliverability — optional own sender identity for bulk mail (the weekly digest).
+ * Empty (default) = behaves exactly like today (uses the transactional SENDER_ADDRESS/NAME).
+ * DIGEST_SENDER_NAME alone (without DIGEST_SENDER_ADDRESS) is deliberately NOT enough to change
+ * the sender — see services/mail.js `senderFor()` — or name and domain would end up mismatched.
+ * WARNING: only set DIGEST_SENDER_ADDRESS once SPF/DKIM/DMARC are configured for that address —
+ * see docs/operations/mail-deliverability.md (frontend repo) before flipping this in production.
+ */
+const DIGEST_SENDER_ADDRESS = $os.getenv('DIGEST_SENDER_ADDRESS') || ''
+const DIGEST_SENDER_NAME = $os.getenv('DIGEST_SENDER_NAME') || ''
+
+/**
+ * HMAC secret for the stateless one-click digest-unsubscribe tokens (services/unsubscribe.js).
+ * Empty = derive a fallback from the `users` collection's authToken secret (logged, never the
+ * value itself). Set an explicit UNSUBSCRIBE_SECRET in production so rotating the users auth
+ * token secret (e.g. a forced logout-everywhere) doesn't also invalidate every unsubscribe link
+ * already sent.
+ */
+const UNSUBSCRIBE_SECRET = $os.getenv('UNSUBSCRIBE_SECRET') || ''
+
+/**
+ * Weekly-digest send pacing (anti-burst courtesy pause for the receiving mail server).
+ * 0 = no pacing. See jobs/digest.js — sleep()s between sends and pauses every DIGEST_BATCH_SIZE.
+ */
+const DIGEST_PACING_MS = intEnv('DIGEST_PACING_MS', 200)
+const DIGEST_BATCH_SIZE = intEnv('DIGEST_BATCH_SIZE', 50)
+const DIGEST_BATCH_PAUSE_MS = intEnv('DIGEST_BATCH_PAUSE_MS', 5000)
 
 module.exports = {
     LOG_LEVEL,
@@ -110,14 +155,14 @@ module.exports = {
     DRY_MODE,
     MAIL_THROTTLE_MINUTES,
     FRONTEND_URL,
-    SYNC_SECRET,
     SYNC_CRON,
     REFRESH_CRON,
-    SYNC_TIMEOUT_SECONDS,
+    INTEGRATION_ALLOW_INSECURE_URL,
     RETENTION_INACTIVE_MONTHS,
     RETENTION_MESSAGES_MONTHS,
     RETENTION_NOTIFICATIONS_DAYS,
     RETENTION_FEEDBACK_MONTHS,
+    RETENTION_INACTIVE_WARN_DAYS,
     ADMIN_NOTIFY_EMAIL,
     RETENTION_SKIP_NOTICE_COOLDOWN_DAYS,
     RETENTION_PAGE_SIZE,
@@ -131,4 +176,10 @@ module.exports = {
     SENDER_ADDRESS,
     SENDER_NAME,
     APP_URL,
+    DIGEST_SENDER_ADDRESS,
+    DIGEST_SENDER_NAME,
+    UNSUBSCRIBE_SECRET,
+    DIGEST_PACING_MS,
+    DIGEST_BATCH_SIZE,
+    DIGEST_BATCH_PAUSE_MS,
 }

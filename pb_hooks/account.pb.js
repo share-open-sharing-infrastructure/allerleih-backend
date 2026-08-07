@@ -64,6 +64,26 @@ routerAdd(
     $apis.requireAuth()
 )
 
+// Normalize the email (trim + lowercase) on every users create/update — Issue #557 /
+// allerleih-backend#41. PocketBase matches emails case-sensitively and doesn't normalize
+// on save, so a mixed-case address (`Julika7@…`) becomes an account that login/reset can
+// never reach (they send the lower-case form the user types). The SvelteKit frontend
+// normalizes at its own boundaries; these hooks are defense-in-depth for every OTHER path
+// — admin UI, direct API writes, other hooks, the requestEmailChange confirm. Using the
+// non-Request variants (onRecordCreate/onRecordUpdate) also covers internal elevated
+// `$app.save()` writes. Idempotent: an already-normalized email is left as-is.
+function normalizeUserEmail(e) {
+    const { normalizeEmail } = require(`${__hooks}/utils/email.js`)
+    const current = e.record.get('email')
+    const normalized = normalizeEmail(current)
+    if (normalized && normalized !== current) {
+        e.record.set('email', normalized)
+    }
+    e.next()
+}
+onRecordCreate(normalizeUserEmail, 'users')
+onRecordUpdate(normalizeUserEmail, 'users')
+
 // Block authentication for accounts that have been deleted (anonymized), and stamp
 // lastLoginAt for the inactive-account retention job (#461).
 onRecordAuthRequest((e) => {

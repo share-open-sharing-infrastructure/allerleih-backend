@@ -34,6 +34,32 @@ test('the two fields exist on user_preferences (alongside emailNotifications)', 
 	assert.ok(names.includes('hasOnboarded'), 'hasOnboarded moved in')
 })
 
+// #607: digestEmails is a separate digest-only opt-out (see the digestEmails migration + B2 in
+// the #607 plan). Backfilled to true for pre-existing rows; new rows must default it correctly
+// at every write path (see applyUnsubscribe / upsertUserPreferences).
+test('digestEmails field exists on user_preferences', async () => {
+	const names = await fieldNames('user_preferences')
+	assert.ok(names.includes('digestEmails'), 'digestEmails present')
+})
+
+// #607 spike S1, characterized: PocketBase bool columns are NOT NULL DEFAULT false — a create
+// that omits a bool field gets `false`, never `null`/absent. This is exactly why the digestEmails
+// migration needs a backfill, and why every create path must set both emailNotifications and
+// digestEmails explicitly rather than relying on "no value = opted in".
+test('S1: a bool field omitted at create resolves to false, not null/absent', async () => {
+	const created = await api('POST', '/api/collections/user_preferences/records', bob.t, {
+		user: bob.id,
+		// emailNotifications and digestEmails intentionally omitted
+	})
+	assert.equal(created.status, 200, JSON.stringify(created.json))
+	assert.equal(created.json.emailNotifications, false)
+	assert.equal(created.json.digestEmails, false)
+	assert.equal(typeof created.json.emailNotifications, 'boolean')
+
+	// Cleanup so later tests in this file (which assume bob has no prefs row) aren't affected.
+	await api('DELETE', `/api/collections/user_preferences/records/${created.json.id}`, adminAuth())
+})
+
 test('an owner can create and read back their own preferences row', async () => {
 	const created = await api('POST', '/api/collections/user_preferences/records', alice.t, {
 		user: alice.id,

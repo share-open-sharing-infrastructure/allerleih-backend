@@ -106,18 +106,50 @@ migrate((app) => {
 
 ### D. Update a `*_public` masking view
 
-Views are SQL. Build the SELECT as a joined array of lines (matches existing style) and set
-`viewQuery`. **Masking views must return NULL for sensitive fields of restricted items** — see
-`1781900049_items_public_mask_grouped.js` for the canonical pattern, and `CLAUDE.md` →
-"Access control & the public views" for what must stay masked.
+Views are SQL. **Prefer a targeted append/replace on the existing `viewQuery` over assigning a
+whole new SELECT**, guarded by an `includes()` check so re-running is a no-op:
 
 ```javascript
+migrate((app) => {
+  const c = app.findCollectionByNameOrId('pbc_VIEW_ID')
+  if (!c.viewQuery.includes('items.created')) {
+    c.viewQuery = c.viewQuery.replace('items.updated,', 'items.updated, items.created,')
+    app.save(c)   // re-syncs the view's fields from the new SELECT
+  }
+}, (app) => {
+  const c = app.findCollectionByNameOrId('pbc_VIEW_ID')
+  c.viewQuery = c.viewQuery.replace('items.updated, items.created,', 'items.updated,')
+  app.save(c)
+})
+```
+
+> **Wholesale `c.viewQuery = SELECT` silently drops whatever else is on the view.** This is not
+> hypothetical — it caused **#624**: `1781900042` appended
+> `WHERE COALESCE(users.deleted, 0) = 0` to `items_public` + `items_searchable` so a deleted
+> account's retained items stay out of discovery, and four migrations then reassigned
+> `viewQuery` without carrying it over — `1781900045` for `items_searchable`, then `1781900049`,
+> `1782750000` and `1783800001` for `items_public` — putting anonymized users' items back in the
+> guest catalogue and in search. If you *must* replace the whole query (a
+> restructured SELECT), re-append every standing clause in the same migration and check the
+> live query first: `app.findCollectionByNameOrId('items_public').viewQuery`.
+
+**Masking views must return NULL for sensitive fields of restricted items** — see
+`1781900049_items_public_mask_grouped.js` for the canonical masking pattern, and `CLAUDE.md` →
+"Access control & the public views" for what must stay masked and which clauses are standing
+invariants.
+
+```javascript
+// Wholesale replacement — only when a targeted replace() won't do. Keep the previous SELECT
+// verbatim for down(), and carry over the standing WHERE clause (see the warning above).
+const MASK = "(items.trusteesOnly OR (items.groups != '' AND items.groups != '[]'))"
 const SELECT = [
   'SELECT',
   '  items.id,',
-  "  (CASE WHEN items.trusteesOnly THEN NULL ELSE items.name END) AS name,",
+  `  (CASE WHEN ${MASK} THEN NULL ELSE items.name END) AS name,`,
   '  items.status, items.categories, items.updated',
   'FROM items',
+  'LEFT JOIN users on items.owner = users.id',
+  'WHERE COALESCE(users.deleted, 0) = 0',
 ].join('\n')
 
 migrate((app) => {
@@ -126,7 +158,7 @@ migrate((app) => {
   return app.save(c)
 }, (app) => {
   const c = app.findCollectionByNameOrId('pbc_VIEW_ID')
-  c.viewQuery = '/* previous SELECT here */'
+  c.viewQuery = '/* previous SELECT here, verbatim */'
   return app.save(c)
 })
 ```
@@ -152,4 +184,7 @@ Or apply against the live DB by starting the server:
 - [ ] Relations reference the right `collectionId` (`users` = `hbacudkt08pfcy3`)
 - [ ] `cascadeDelete` set deliberately — remember DB-level cascades do **not** fire hooks
 - [ ] If item/user visibility changed, the matching `items_public` / `users_public` / `items_searchable` view was updated too
+- [ ] If you touched a view's `viewQuery`, the standing clauses survived — above all
+      `WHERE COALESCE(users.deleted, 0) = 0` on both item views (#624). Prefer append/replace;
+      `npm test` catches a dropped clause via `tests/deleted-owner-items.test.mjs`
 - [ ] Coordinated with the frontend — run the **`schema-change`** skill in `~/allerleih` to keep `src/lib/types/models.ts`, `docs/data-model.md`, and the public-view leak check in lockstep

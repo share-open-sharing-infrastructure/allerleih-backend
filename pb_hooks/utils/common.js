@@ -40,6 +40,26 @@ function daysAgoIso(days) {
     return d.toISOString().replace('T', ' ').slice(0, 19) + '.000Z'
 }
 
+/** Shift a "YYYY-MM-DD HH:mm:ss.sssZ" string by `days` days (positive = future). */
+function shiftDaysIso(iso, days) {
+    // The space-separated PocketBase format is not portably Date-parseable; restore the 'T'.
+    const d = new Date(iso.replace(' ', 'T'))
+    d.setUTCDate(d.getUTCDate() + days)
+    return d.toISOString().replace('T', ' ').slice(0, 19) + '.000Z'
+}
+
+/** Shift a "YYYY-MM-DD HH:mm:ss.sssZ" string `months` calendar months into the future. */
+function monthsAfterIso(iso, months) {
+    const d = new Date(iso.replace(' ', 'T'))
+    const day = d.getUTCDate()
+    // Same roll-over guard as monthsAgoIso: anchor to the 1st, then clamp the day.
+    d.setUTCDate(1)
+    d.setUTCMonth(d.getUTCMonth() + months)
+    const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate()
+    d.setUTCDate(Math.min(day, lastDay))
+    return d.toISOString().replace('T', ' ').slice(0, 19) + '.000Z'
+}
+
 /**
  * Classify a configured retention window and, when valid, resolve its cutoff.
  * Guards a destructive job against misconfiguration: only an explicit 0 disables it;
@@ -73,6 +93,8 @@ module.exports = {
     now,
     monthsAgoIso,
     daysAgoIso,
+    shiftDaysIso,
+    monthsAfterIso,
     retentionCutoff,
     uniqueBy,
 }

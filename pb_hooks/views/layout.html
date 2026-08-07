@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="de">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -18,13 +18,20 @@
     <div class="wrapper">
         <div class="container">
             <div class="header">
-                <img src="{{.APP_URL}}AllerLeih.png" alt="AllerLeih" width="105" height="48" style="height: 48px; width: auto; max-width: 100%; display: block; margin: 0 auto;" />
+                <img src="{{.ASSET_URL}}/AllerLeih.png" alt="AllerLeih" width="105" height="48" style="height: 48px; width: auto; max-width: 100%; display: block; margin: 0 auto;" />
             </div>
             <div class="content">
                 {{raw .CONTENT}}
             </div>
             <div class="footer">
-                <p><a href="https://allerleih.org/" style="color: #6B6B6B; text-decoration: none;">AllerLeih &mdash; Teilen statt Besitzen</a></p>
+                <p><a href="{{.SITE_URL}}/" style="color: #6B6B6B; text-decoration: none;">AllerLeih &mdash; Teilen statt Besitzen</a></p>
+                {{if .UNSUBSCRIBE_URL}}
+                <p style="margin: 8px 0 0 0;">
+                    <a href="{{.UNSUBSCRIBE_URL}}" style="color: #6B6B6B; text-decoration: underline;">Wochen-R&uuml;ckblick abbestellen</a>
+                    &nbsp;&middot;&nbsp;
+                    <a href="{{.PREFS_URL}}" style="color: #6B6B6B; text-decoration: underline;">Benachrichtigungen anpassen</a>
+                </p>
+                {{end}}
             </div>
         </div>
     </div>

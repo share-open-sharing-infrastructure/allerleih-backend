@@ -8,8 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 PocketBase runs as a single binary ("Zero-Go"): all custom server logic lives in **JS hooks**
 (`pb_hooks/`) and all schema lives in **versioned migrations** (`pb_migrations/`) that auto-apply
 on start. There is no separate application server and no build step. The companion SvelteKit
-frontend lives in the `share-mvp` repo (`~/allerleih`) and talks to this backend over the
-PocketBase REST/realtime API.
+frontend lives in the `share-mvp` repo (sibling directory) and talks to this backend over the
+PocketBase REST/realtime API. (`README.md` has the full quick-start/deploy instructions — link,
+don't import, it's 300+ lines.)
 
 ## Running and testing
 
@@ -24,37 +25,53 @@ npm test                                 # node --test, runs tests/*.test.mjs se
   DB + uploads (not in the repo); delete it to reset to a clean migrated state.
 - **Tests** spin up a *throwaway* PocketBase on a separate port against a throwaway data dir,
   apply all migrations + hooks, and run end-to-end via HTTP. Helpers in `tests/harness.mjs`
-  (`startPB`, `stopPB`, `api`, `makeUser`, `adminAuth`). They run serially
-  (`--test-concurrency=1`) because each owns the server.
+  (`startPB`, `stopPB`, `api`, `makeUser`, `adminAuth`, plus the #607 mail-deliverability helpers
+  `startPbWithSmtpSink` — `startPB()` pre-wired to a real SMTP sink, see `tests/smtpSink.mjs` —
+  `headerValue`, a fold-aware raw-MIME header extractor, `extractPart`/`decodeQuotedPrintable`, a
+  MIME-part extractor and quoted-printable decoder for asserting on a mail's HTML/text body, and
+  `waitForMessageCount`, an adaptive poll that waits for a sink to reach a given message count).
+  They run serially (`--test-concurrency=1`) because each owns the server.
+- For personal local settings (custom ports, local superuser creds) that shouldn't be shared with
+  the team, use a gitignored `CLAUDE.local.md` at the repo root — it loads alongside this file.
 
 ## Repository structure
 
 ```
-pb_hooks/                    # custom server logic (auto-loaded JS)
-├── main.pb.js               # bootstrap / startup logging
-├── mail_config.pb.js        # bootstrap: configures SMTP from env when SMTP_HOST is set (#8); unset = no-op
-├── constants.js             # ALL env vars + config in one place (see below)
-├── group.pb.js              # group lifecycle hooks + /api/group-invite/* routes
-├── trust.pb.js              # `trusts` join guard (rejects self-trust edges)
-├── invite.pb.js             # GET /api/invite/{code} — public invite-code lookup
-├── contact.pb.js            # GET /api/contact/{userId} — visibility-gated contact handles
-├── travel.pb.js             # POST /api/travel-times — ORS travel-time matrix
-├── legal.pb.js              # platform legal consent (#399): /api/legal/accept|decline (superuser,
-│                            #   server-authoritative), users-create consent stamping, locked-user guard
-├── notification.pb.js       # messages → in-app notification + throttled email
-├── integration_sync.pb.js   # cron jobs POSTing the frontend's /api/sync + /api/refresh (see below)
-├── services/                # shared business logic: group.js, notification.js, mail.js
-├── utils/                   # common.js (nowIso, formatDateTime, uniqueBy), db.js
-├── views/                   # email HTML templates (layout.html + mail/)
-├── jobs/                    # cron job bodies: integrationSync.js
-├── routes/                  # placeholder — routes currently live in *.pb.js
-├── account.pb.js            # DELETE /api/account + export, deleted-login block, lastLoginAt stamp
-├── retention.pb.js          # GDPR retention cron jobs (#461) + guarded test route
-├── services/                # shared business logic: account.js, group.js, legal.js, notification.js, mail.js
-├── utils/                   # common.js (now, monthsAgoIso, daysAgoIso, formatDateTime, uniqueBy), db.js
-├── views/                   # email HTML templates (layout.html + mail/)
-├── jobs/                    # retention.js — GDPR purge job logic (called from retention.pb.js)
-├── routes/                  # placeholder — routes live in *.pb.js
+pb_hooks/                    # custom server logic (auto-loaded JS), one file per domain area
+├── main.pb.js                    # bootstrap / startup logging
+├── mail_config.pb.js             # bootstrap: configures SMTP from env when SMTP_HOST is set (#8)
+├── auth_mail_templates.pb.js     # bootstrap: re-injects FRONTEND_URL into `users` auth-mail links (#447)
+├── constants.js                  # ALL env vars + config in one place (see .claude/rules/config.md)
+├── group.pb.js                   # group lifecycle hooks + /api/group-invite/* routes
+├── trust.pb.js                   # `trusts` join guard (rejects self-trust edges)
+├── invite.pb.js                  # GET /api/invite/{code} — public invite-code lookup
+├── contact.pb.js                 # GET /api/contact/{userId} — visibility-gated contact handles
+├── travel.pb.js                  # POST /api/travel-times — ORS travel-time matrix
+├── legal.pb.js                   # platform legal consent (#399): /api/legal/accept|decline
+├── notification.pb.js            # messages → in-app notification + throttled email
+├── notification_guard.pb.js      # onRecordCreateRequest guard on user-created notifications
+├── lending.pb.js                 # #373 conversations onRecordUpdateRequest guard (abort flow)
+├── integration_sync.pb.js        # cron registration: integration_sync + integration_refresh — as of #487
+│                                 #   Phase 2 BOTH run LOCALLY (see .claude/rules/integration-sync.md)
+├── integration_import.pb.js      # #487 Phase 3: CSV-import write path — POST /api/import/{apply,preview,
+│                                 #   refresh} (requireAuth, institution-only, owner = e.auth.id)
+├── integrations/                 # #487 Goja port of the integration pipeline: sync.js (runSync full pull),
+│                                 #   refresh.js (runRefresh per-item), db.js (findSyncConfigs + applyDiff),
+│                                 #   import.js (Phase 3 apply/preview/refresh), diff.js, leihbackend.js,
+│                                 #   winbiap.js, urlGuard.js, lock.js, types.js
+├── account.pb.js                 # DELETE /api/account + export, deleted-login block, email normalization (#557)
+├── retention.pb.js               # GDPR retention cron jobs (#461) + guarded test route
+├── digest.pb.js                  # #607: weekly_digest cron registration + guarded test route (jobs/digest.js)
+├── unsubscribe.pb.js             # #607: GET/POST /api/unsubscribe/{purpose}/{token} — one-click digest unsubscribe
+├── services/                     # shared business logic: account.js, group.js, legal.js, notification.js,
+│                                 #   mail.js, syncConfig.js (used only by the historical backfill migration),
+│                                 #   unsubscribe.js (#607: HMAC token verify/apply + the confirmation page render)
+├── utils/                        # common.js, email.js (normalizeEmail, #557), db.js, urls.js (#607: assetBase/
+│                                 #   siteBase — backend vs. frontend origin), htmlToText.js (#607: mail plaintext)
+├── views/                        # email HTML templates (layout.html + mail/); unsubscribe.html (#607: the
+│                                 #   standalone confirmation page, NOT a mail template)
+├── jobs/                         # cron job bodies: retention.js, digest.js (#607, extracted from digest.pb.js)
+├── routes/                       # placeholder — routes currently live in *.pb.js
 pb_migrations/               # <timestamp>_<description>.js — schema, applied in filename order
 pb_public/                   # static assets served by PocketBase
 tests/                       # *.test.mjs integration tests + harness.mjs
@@ -63,12 +80,17 @@ pb_data/                     # live DB + uploads (gitignored, created on first s
 
 ## CRITICAL: hook files run in isolated contexts — `require()` inside the handler
 
-Each `pb_hooks/*.pb.js` handler runs in its own isolated JS context. **Top-level imports are
-NOT visible inside `routerAdd`/`onRecord*` callbacks.** You must `require()` shared code *inside*
-the handler, using the `__hooks` magic path:
+Each `pb_hooks/*.pb.js` handler runs in its own isolated JS context. **NOTHING declared at a
+`*.pb.js` file's top level — not `require()` results, and not a plain `const`/`function` you wrote
+yourself in that same file — is reliably visible inside a `routerAdd`/`onRecord*`/`cronAdd`
+callback registered there.** Confirmed empirically while building #607's `unsubscribe.pb.js`: a
+top-level `const PURPOSES = [...]` in that file threw `ReferenceError: PURPOSES is not defined`
+the moment a registered `routerAdd` callback referenced it — this is not just a require() quirk,
+it applies to any top-level declaration. `require()` shared code, and define any other helper,
+*inside* the handler, using the `__hooks` magic path:
 
 ```javascript
-// CORRECT — require inside the handler
+// CORRECT — require AND any shared constants/helpers declared inside the handler
 onRecordAfterCreateSuccess((e) => {
   const { createNotification } = require(`${__hooks}/services/notification.js`)
   const { DRY_MODE } = require(`${__hooks}/constants.js`)
@@ -76,9 +98,17 @@ onRecordAfterCreateSuccess((e) => {
   e.next()
 }, 'messages')
 
-// WRONG — top-level require is not in scope when the handler fires
+// WRONG — neither a top-level require() nor a top-level const/function is in scope when the
+// handler fires, even though both live in the very same file as the registration call below.
 const { createNotification } = require(`${__hooks}/services/notification.js`)  // ❌
+const SOME_ALLOWLIST = ['a', 'b']  // ❌ — also not visible inside the callback below
+routerAdd('GET', '/api/example', (e) => { /* SOME_ALLOWLIST is undefined here */ })
 ```
+
+(Plain helper functions/constants declared at the top level of a `services/`/`utils/`/`jobs/`
+module — i.e. a file that is itself `require()`'d fresh inside a handler, not a `*.pb.js` hook
+file — are unaffected and work exactly like normal CommonJS: `services/mail.js`, `services/account.js`,
+`jobs/retention.js` and `jobs/digest.js` all rely on this and it works fine.)
 
 Shared logic goes in `services/` (business logic) or `utils/` (pure helpers) and is exported with
 `module.exports = { ... }`.
@@ -115,79 +145,10 @@ constructors `Record(collection)`, `Collection({...})`, `Field({...})`.
 - **Filter queries with placeholders**, never string interpolation:
   `$app.findFirstRecordByFilter('group_invites', 'token = {:t}', { t: token })`.
 
-## Migration conventions
-
-Filename: `<timestamp>_<snake_case_description>.js`. The timestamp prefix only controls **apply
-order** — it must be greater than every existing migration so new migrations run last. Each
-migration is `migrate(up, down)`:
-
-```javascript
-migrate((app) => {          // UP — apply
-  const collection = new Collection({
-    name: 'groups',
-    id: 'pbc_groups00001',  // stable explicit IDs; relations reference these
-    type: 'base',
-    listRule:   '@request.auth.id = owner',
-    viewRule:   '@request.auth.id = owner',
-    createRule: '@request.auth.id = owner',
-    updateRule: '@request.auth.id = owner',
-    deleteRule: '@request.auth.id = owner',
-    fields: [
-      { name: 'name',  type: 'text', required: true },
-      { name: 'owner', type: 'relation', collectionId: 'hbacudkt08pfcy3', cascadeDelete: true },
-      { name: 'created', type: 'autodate', onCreate: true },
-    ],
-    indexes: ['CREATE UNIQUE INDEX `idx_x` ON `groups` (`name`, `owner`)'],
-  })
-  return app.save(collection)
-}, (app) => {               // DOWN — revert (mirror the up exactly)
-  return app.delete(app.findCollectionByNameOrId('pbc_groups00001'))
-})
-```
-
-- **Add a field to an existing collection** by fetching it, `collection.fields.add(new Field({...}))`,
-  and `app.save(collection)`. Always provide a matching `down`.
-- **`users` collection id is `hbacudkt08pfcy3`** — relations to users reference this id.
-- **Ordering dependencies are real**: a collection must be created before another collection or an
-  access rule references it (e.g. `group_members` before any rule that traverses it). Keep
-  dependent migrations in the correct timestamp order.
-- **`*_public` views are migrations too**: set `collection.viewQuery = '<SELECT ...>'` and
-  `app.save(collection)`. See "Public views" below.
-
-## Custom HTTP endpoints
-
-These supplement the standard PocketBase collection API. Frontend `/api/*` routes are a *separate*
-thing (SvelteKit) — these are PocketBase routes:
-
-| Method | Path | File | Purpose |
-|---|---|---|---|
-| GET  | `/api/invite/{code}` | invite.pb.js | Resolve invite code → `{id, username}`; 404 if unknown (no enumeration) |
-| GET  | `/api/group-invite/{token}` | group.pb.js | Public preview of a group invite (validity + group name) |
-| POST | `/api/group-invite/{token}/join` | group.pb.js | Join via invite; auth required; idempotent; transactional `uses`/cap/expiry check |
-| GET  | `/api/contact/{userId}` | contact.pb.js | Telegram/Signal handles, gated by the owner's per-channel visibility flags; auth required |
-| POST | `/api/travel-times` | travel.pb.js | ORS travel-time matrix (user → owners), bucketed to minutes; auth required |
-| POST | `/api/legal/accept` | legal.pb.js | Record the user's acceptance of the active legal docs (snapshot from `legal_documents`), refresh their version cache, clear any lock — transactional, superuser; auth required |
-| POST | `/api/legal/decline` | legal.pb.js | Record rejection of the active legal docs and set `legalLocked` — transactional, superuser; auth required |
-| POST | `/api/_test/run-retention/{job}` | retention.pb.js | Test-only: run a retention job with an explicit `cutoff`. Registered ONLY when `RETENTION_TEST_ROUTE=true`; superuser required. Not present in production |
-
-## Scheduled jobs (`retention.pb.js` + `jobs/retention.js`)
-
-The open-loan guard (`BLOCKING_LOAN_FILTER` in `services/account.js`) is a **deliberate mirror**
-of `ACTIVE_LENDING_STATES` from the frontend's `src/lib/lending.ts` (share-mvp) — `accepted` /
-`active` / `return_requested`, intentionally **without** `pending` (a mere request must not block
-deletion). Separate repos, no shared package: a lending-status change on the frontend
-(`$lib/lending.ts`) **must** be carried over to this filter (and its comment) in the same effort.
-
-GDPR data-retention (#461, DSE v2.8): four nightly `cronAdd` jobs — inactive accounts (02:00,
-anonymize via `anonymizeAccount`; accounts with an open loan are skipped and user + admin get a
-mail), conversations incl. messages + related notifications (02:10), notifications (02:20),
-feedback (02:30). Windows come from `constants.js` (`RETENTION_*`); a window of `0` disables the
-job, a NaN/negative value is refused (logged, never runs). Per-record failures are isolated (one bad
-row can't abort the batch); jobs are idempotent and log **counts only, never personal data**.
-`users.lastLoginAt` (the inactivity signal) is stamped in `account.pb.js`'s `onRecordAuthRequest`,
-throttled to once per 24h. `users.lastLoginAt` and `users.retentionNotifiedAt` are `hidden: true` —
-the `users` collection is readable by any authenticated user, so these internal fields must never be
-serialized. The open-loan skip notice is deduped via `retentionNotifiedAt` (cooldown).
+Full migration-writing conventions, the custom HTTP endpoint table, the retention/cron job
+internals, the auth-mail template mechanics, and the full `constants.js` config table have moved
+to path-scoped `.claude/rules/*.md` files (see "Where to look" below) so they only load into
+context when you're actually touching that area.
 
 ## Access control & the public views
 
@@ -196,8 +157,7 @@ Collection rules use `@request.auth`:
 - `@request.auth.id = owner` — only the record's owner
 - `owner.trusts_via_truster.trustee.id ?= @request.auth.id` — the item's owner trusts the current
   user (traversal through the `trusts` join collection: rows where `truster = owner`, `?=` is
-  "any-match"). Trust is a first-class join (`trusts`: `truster`, `trustee`), replacing the old
-  `users.trusts[]` multi-relation — same directional model as `group_members`.
+  "any-match"). Trust is a first-class join (`trusts`: `truster`, `trustee`).
 - `groups.group_members_via_group.user.id ?= @request.auth.id` — current user is a member of one of
   the item's groups (traversal through the `group_members` join table)
 - `groups:length = 0` — the multi-relation is empty (used to distinguish "public" from "group-only")
@@ -208,77 +168,45 @@ browsing.** `items_public` returns `NULL` for `name`/`description`/`image` of an
 "restricted item exists" without leaking content). `users_public` omits email and raw coordinates.
 When you change item/user visibility, **update the corresponding view migration** or you will leak
 restricted data to guests. `items_searchable` (auth-only) *filters* rows instead of masking them.
+**`items_public.image` masks via a SQL `CASE` expression, which PocketBase types as a `json`
+column — not a `file` column — so it can never serve a file at all (404; this was #622).** Item
+files are always served through `/api/files/items_searchable/{id}/{filename}` (a real, cloned
+`file` field), never through `items_public`, regardless of the item's visibility. PocketBase's
+file-serving endpoint does not evaluate a collection's view rule — only the field's `protected`
+flag (`false` for both views) — so this URL is reachable unauthenticated with no token and no
+expiry; the barrier against leaking a restricted item's image is at the call site (e.g. the weekly
+digest's `allowUploadedImages`, `pb_hooks/jobs/digest.js`), not the server.
+Both item views additionally exclude rows whose owner is `deleted`
+(`WHERE COALESCE(users.deleted, 0) = 0`) so an anonymized account's conversation-retained items
+stay out of the catalogue and search — a **standing invariant every `viewQuery` rewrite must
+carry over** (#624; guarded by `tests/deleted-owner-items.test.mjs`).
 
-## Cascade deletes vs. the group-deletion fixup
+## Backend-only issues
 
-Relation `cascadeDelete: true` enforces deletion at the **SQLite foreign-key level** (deleting a
-user deletes their groups → members → invites). Because that is DB-level, hooks do **not** fire for
-cascaded rows.
+An issue that only touches this repo (no frontend changes) should still be driven through
+`share-mvp`'s `/issue-to-pr` orchestrator and `/create-pr` skill when working across the two-repo
+workspace — they carry the plan-approval gate, the review-role dispatch (the frontend's
+`sveltekit-pb-reviewer` role explicitly covers `pb_hooks`/`pb_migrations` diffs), and the shared
+branch-naming convention. This repo also has its own local `/create-pr` skill for standalone use
+when working in this repo alone.
 
-The one place application logic must run on delete is **group deletion** (`onRecordDelete` in
-`group.pb.js`): when a group is deleted, any item whose *only* sharing was that group would silently
-become public — so the hook flips those items to `trusteesOnly = true`, and rolls the delete back if
-the flip fails. A raw DB-level cascade (e.g. deleting the owner) bypasses this hook — keep that in
-mind before adding user-deletion features.
+## Where to look (load on demand)
 
-The second delete hook is **member removal / leaving** (`onRecordDelete` on `group_members` in
-`group.pb.js`): when a membership is deleted explicitly (owner removes a member, or a member
-leaves), that member's items are un-shared from the group — otherwise they stay visible to the
-group but break on request (the owner is no longer a member) and the ex-member can't reach the
-group to un-share them. Same fail-safe + `trusteesOnly` flip as the group-delete fixup. It fires
-**only for explicit membership deletes**: group/user cascade deletes are DB-level and don't trigger
-hooks, so the whole-group teardown stays owned by the group-delete fixup.
-
-Note the same DB-level caveat for **`trusts` edges on account deletion**: the `trusts` relations
-`cascadeDelete`, but self-service deletion is *anonymize-in-place* (the `users` row is kept with
-`deleted=true`), so the cascade never fires. `anonymizeAccount` (`services/account.js`) therefore
-deletes the account's trust edges explicitly, in both directions
-(`deleteByFilter('trusts', 'truster = {:u} || trustee = {:u}')`).
-
-## Configuration (`pb_hooks/constants.js`)
-
-All env/config is centralized here; most have safe defaults:
-
-| Export | Env var | Default | Purpose |
-|---|---|---|---|
-| `LOG_LEVEL` | `LOG_LEVEL` | `4` | 1=DEBUG … 4=ERROR |
-| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | `VAPID_*` | — / `mailto:allerleih@posteo.de` | Web-push |
-| `DRY_MODE` | `DRY_MODE` | `false` | When `true`, skips sending email/notifications (local dev) |
-| `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
-| `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — target of the sync/refresh cron calls. **Must be `https://` unless loopback** — the sync secret travels as a Bearer header (non-loopback `http://` logs a startup warning) |
-| `SYNC_SECRET` | `SYNC_SECRET` | `''` | Bearer token for the frontend's `/api/sync` + `/api/refresh`; must equal the frontend's `SYNC_SECRET` |
-| `SYNC_CRON` | `SYNC_CRON` | `''` | Cron expression for the full catalogue pull (`POST /api/sync`); empty disables the job |
-| `REFRESH_CRON` | `REFRESH_CRON` | `''` | Cron expression for the per-item refresh (`POST /api/refresh`); empty disables the job |
-| `SYNC_TIMEOUT_SECONDS` | `SYNC_TIMEOUT_SECONDS` | `540` | HTTP timeout for the sync/refresh calls (a full sync can take minutes) |
-| `RETENTION_INACTIVE_MONTHS` | `RETENTION_INACTIVE_MONTHS` | `6` | Anonymize accounts with no login for N months (0 = off) |
-| `RETENTION_MESSAGES_MONTHS` | `RETENTION_MESSAGES_MONTHS` | `6` | Delete conversations N months after last activity (0 = off) |
-| `RETENTION_NOTIFICATIONS_DAYS` | `RETENTION_NOTIFICATIONS_DAYS` | `90` | Delete in-app notifications after N days (0 = off) |
-| `RETENTION_FEEDBACK_MONTHS` | `RETENTION_FEEDBACK_MONTHS` | `6` | Delete feedback entries after N months (0 = off) |
-| `ADMIN_NOTIFY_EMAIL` | `ADMIN_NOTIFY_EMAIL` | — | Admin recipient for the "inactive account skipped (open loan)" notice |
-| `RETENTION_SKIP_NOTICE_COOLDOWN_DAYS` | `RETENTION_SKIP_NOTICE_COOLDOWN_DAYS` | `7` | Min days between repeat skip notices for the same account |
-| `RETENTION_PAGE_SIZE` | `RETENTION_PAGE_SIZE` | `200` | Records per keyset-paginated batch in the retention jobs (tests set it low) |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | `SMTP_*` | — / `587` / — / — | SMTP server applied on bootstrap by `mail_config.pb.js` **only when `SMTP_HOST` is set** (idempotent). Empty `SMTP_HOST` = no-op: existing admin-UI settings are left untouched (never disabled/cleared) |
-| `SMTP_TLS` / `SMTP_AUTH_METHOD` / `SMTP_LOCAL_NAME` | `SMTP_*` | `false` / `PLAIN` / — | `SMTP_TLS=true` = implicit TLS (465); `false` = STARTTLS (587) |
-| `SENDER_ADDRESS` / `SENDER_NAME` / `APP_URL` | same | — | Optional overrides of the `meta` mail settings; only applied when set |
-
-Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
-geocoding, and email don't work for real.
-
-## Cron jobs (`integration_sync.pb.js` + `jobs/integrationSync.js`)
-
-When `SYNC_CRON` / `REFRESH_CRON` are set (and `FRONTEND_URL` + `SYNC_SECRET` are present), the
-backend registers the cron jobs `integration_sync` and `integration_refresh`, which POST the
-frontend's bearer-protected integration endpoints on that schedule. A misconfigured job (cron set
-but URL/secret missing, or a syntactically invalid cron expression) logs an error and is not
-scheduled without affecting the sibling job; `DRY_MODE` skips the outbound call.
-Superusers can inspect and manually fire the jobs in the admin UI (Settings → Crons) or via
-`GET /api/crons` / `POST /api/crons/{id}` — the tests use the latter. Operational details live in
-the frontend repo: `docs/operations/integration-sync.md`.
+| Working on… | Read |
+|---|---|
+| Writing a migration | `.claude/rules/migrations.md`, `/new-migration` skill |
+| Item categories (cross-repo fixed list) | `.claude/rules/migrations.md` → "Item categories" |
+| Adding/changing a custom HTTP route | `.claude/rules/http-endpoints.md` |
+| `retention.pb.js` / GDPR jobs | `.claude/rules/retention.md` |
+| Group/account deletion & cascade behavior | `.claude/rules/cascade-deletes.md` |
+| Auth-mail templates | `.claude/rules/auth-mail.md` |
+| Integration sync cron jobs | `.claude/rules/integration-sync.md` |
+| Full env var / `constants.js` reference | `.claude/rules/config.md` |
 
 ## Keeping this file in sync
 
 Whenever you add/rename a hook file, a `routerAdd` endpoint, a collection/view, a `services/` or
-`utils/` helper, or a config key in `constants.js`, **update the matching section here in the same
-change** so this file never drifts from the code. Schema is the source of truth in
-`pb_migrations/` — the frontend repo consumes this API, so coordinate breaking schema changes with
-`~/allerleih`.
+`utils/` helper, or a config key in `constants.js`, **update the matching section here (or the
+matching `.claude/rules/*.md` file) in the same change** so these files never drift from the code.
+Schema is the source of truth in `pb_migrations/` — the frontend repo consumes this API, so
+coordinate breaking schema changes with `share-mvp`.
