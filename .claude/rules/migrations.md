@@ -44,7 +44,10 @@ migrate((app) => {          // UP — apply
   dependent migrations in the correct timestamp order.
 - **`*_public` views are migrations too**: set `collection.viewQuery = '<SELECT ...>'` and
   `app.save(collection)`. See `CLAUDE.md` → "Access control & the public views" for what must
-  stay masked.
+  stay masked. Both item views additionally carry the standing clause
+  `WHERE COALESCE(users.deleted, 0) = 0` (#624) — prefer a targeted append/replace over a
+  wholesale `viewQuery` assignment, which drops it silently; `tests/deleted-owner-items.test.mjs`
+  fails if it goes missing.
 
 ## Item categories
 

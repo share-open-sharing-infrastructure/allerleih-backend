@@ -176,6 +176,10 @@ file-serving endpoint does not evaluate a collection's view rule — only the fi
 flag (`false` for both views) — so this URL is reachable unauthenticated with no token and no
 expiry; the barrier against leaking a restricted item's image is at the call site (e.g. the weekly
 digest's `allowUploadedImages`, `pb_hooks/jobs/digest.js`), not the server.
+Both item views additionally exclude rows whose owner is `deleted`
+(`WHERE COALESCE(users.deleted, 0) = 0`) so an anonymized account's conversation-retained items
+stay out of the catalogue and search — a **standing invariant every `viewQuery` rewrite must
+carry over** (#624; guarded by `tests/deleted-owner-items.test.mjs`).
 
 ## Backend-only issues
 
