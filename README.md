@@ -359,7 +359,10 @@ few spam-filter-friendly properties baked in:
   `pb_public` assets, `/api/files/…`, the unsubscribe endpoint) and `siteBase()` (the SvelteKit
   frontend origin, `FRONTEND_URL`) as two separate bases, so a link never ends up pointing at the
   wrong host (the `APP_URL`/`{APP_URL}` value is the **backend** origin, per the #447 decision —
-  see the `APP_URL` row above).
+  see the `APP_URL` row above). Item thumbnails in the digest are served from
+  `{assetBase}/api/files/items_searchable/{itemId}/{filename}?thumb=0x300` — **not**
+  `items_public`, whose `image` column is a masking expression PocketBase types as `json` and
+  therefore never serves a file (404, #622).
 
 None of this replaces actual DNS-level deliverability work (SPF/DKIM/DMARC, PTR/rDNS, mail-tester
 verification) — that live-diagnosis checklist, plus the env-var reference and rollout notes for

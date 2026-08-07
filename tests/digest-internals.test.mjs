@@ -113,6 +113,77 @@ test('renderItemList()+htmlToText(): no HTML tag leaks and no ")" is ever glued 
 	}
 })
 
+// --- #622: renderItemList() image-URL resolution (items_searchable, escaping) -------------------
+// No coverage of the uploaded-file branch existed before this: every fixture above uses
+// externalImgUrl with allowUploadedImages=false. These exercise the `image` field directly.
+
+test('renderItemList(): allowUploadedImages=true uses items_searchable with the whitelisted thumb, never items_public', () => {
+	const item = makeRecord('pub1', {
+		name: 'Bohrmaschine',
+		categories: [],
+		owner: 'owner1',
+		image: ['photo_abc.png'],
+	})
+	const html = renderItemList(ASSET, SITE, [item], 5, { owner1: 'Alice' }, true)
+
+	assert.ok(
+		html.includes(`src="${ASSET}/api/files/items_searchable/pub1/photo_abc.png?thumb=0x300"`),
+		'must build the items_searchable file URL with the whitelisted thumb size'
+	)
+	assert.ok(
+		!html.includes('items_public'),
+		'must never link an uploaded file through items_public (#622 — its image column is masked to json, 404)'
+	)
+})
+
+test('renderItemList(): allowUploadedImages=false renders externalImgUrl instead, even when an uploaded image also exists', () => {
+	const item = makeRecord('restricted1', {
+		name: 'Bohrmaschine',
+		categories: [],
+		owner: 'owner1',
+		image: ['photo_abc.png'],
+		externalImgUrl: 'https://img.example.test/external.jpg',
+	})
+	const html = renderItemList(ASSET, SITE, [item], 5, { owner1: 'Alice' }, false)
+
+	assert.ok(html.includes('src="https://img.example.test/external.jpg"'), 'must render externalImgUrl')
+	assert.ok(
+		!html.includes('/api/files/'),
+		'trustees-only/group sections (allowUploadedImages=false) must never emit a file URL, even though the item has one'
+	)
+})
+
+test('renderItemList(): allowUploadedImages=false with no externalImgUrl renders no <img> at all', () => {
+	const item = makeRecord('restricted2', {
+		name: 'Bohrmaschine',
+		categories: [],
+		owner: 'owner1',
+		image: ['photo_abc.png'],
+	})
+	const html = renderItemList(ASSET, SITE, [item], 5, { owner1: 'Alice' }, false)
+
+	assert.ok(
+		!html.includes('<img'),
+		'no uploaded-file URL and no externalImgUrl must mean no image at all — never falls back to the file URL'
+	)
+})
+
+test('renderItemList(): a `"` in externalImgUrl is escaped and cannot break out of the src attribute', () => {
+	const item = makeRecord('xss1', {
+		name: 'Bohrmaschine',
+		categories: [],
+		owner: 'owner1',
+		externalImgUrl: 'https://img.example.test/a.jpg"><script>alert(1)</script>',
+	})
+	const html = renderItemList(ASSET, SITE, [item], 5, { owner1: 'Alice' }, false)
+
+	assert.ok(!html.includes('<script>'), 'the raw `"` must not be able to break out of the src="..." attribute')
+	assert.ok(
+		html.includes('src="https://img.example.test/a.jpg&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"'),
+		'the externalImgUrl must be HTML-escaped inside the src attribute'
+	)
+})
+
 // --- S2: categorizeItemsForUser() visibility rules ----------------------------------------------
 
 test('categorizeItemsForUser: a trusteesOnly item is visible when the owner trusts the viewer', () => {

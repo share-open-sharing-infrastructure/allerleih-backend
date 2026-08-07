@@ -26,9 +26,11 @@ npm test                                 # node --test, runs tests/*.test.mjs se
 - **Tests** spin up a *throwaway* PocketBase on a separate port against a throwaway data dir,
   apply all migrations + hooks, and run end-to-end via HTTP. Helpers in `tests/harness.mjs`
   (`startPB`, `stopPB`, `api`, `makeUser`, `adminAuth`, plus the #607 mail-deliverability helpers
-  `startPbWithSmtpSink` — `startPB()` pre-wired to a real SMTP sink, see `tests/smtpSink.mjs` — and
-  `headerValue`, a fold-aware raw-MIME header extractor). They run serially
-  (`--test-concurrency=1`) because each owns the server.
+  `startPbWithSmtpSink` — `startPB()` pre-wired to a real SMTP sink, see `tests/smtpSink.mjs` —
+  `headerValue`, a fold-aware raw-MIME header extractor, `extractPart`/`decodeQuotedPrintable`, a
+  MIME-part extractor and quoted-printable decoder for asserting on a mail's HTML/text body, and
+  `waitForMessageCount`, an adaptive poll that waits for a sink to reach a given message count).
+  They run serially (`--test-concurrency=1`) because each owns the server.
 - For personal local settings (custom ports, local superuser creds) that shouldn't be shared with
   the team, use a gitignored `CLAUDE.local.md` at the repo root — it loads alongside this file.
 
@@ -166,6 +168,14 @@ browsing.** `items_public` returns `NULL` for `name`/`description`/`image` of an
 "restricted item exists" without leaking content). `users_public` omits email and raw coordinates.
 When you change item/user visibility, **update the corresponding view migration** or you will leak
 restricted data to guests. `items_searchable` (auth-only) *filters* rows instead of masking them.
+**`items_public.image` masks via a SQL `CASE` expression, which PocketBase types as a `json`
+column — not a `file` column — so it can never serve a file at all (404; this was #622).** Item
+files are always served through `/api/files/items_searchable/{id}/{filename}` (a real, cloned
+`file` field), never through `items_public`, regardless of the item's visibility. PocketBase's
+file-serving endpoint does not evaluate a collection's view rule — only the field's `protected`
+flag (`false` for both views) — so this URL is reachable unauthenticated with no token and no
+expiry; the barrier against leaking a restricted item's image is at the call site (e.g. the weekly
+digest's `allowUploadedImages`, `pb_hooks/jobs/digest.js`), not the server.
 
 ## Backend-only issues
 
