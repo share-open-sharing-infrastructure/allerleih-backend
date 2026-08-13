@@ -134,11 +134,11 @@ set -a; source local.env; set +a   # local.env is gitignored
 Useful values while developing:
 
 ```env
-DRY_MODE=true     # suppress outbound email / push side effects
+DRY_MODE=true     # suppress outbound email side effects
 LOG_LEVEL=1       # 1=DEBUG … 4=ERROR
 ```
 
-Real credentials for the external services (OpenRouteService, SMTP, VAPID) are not in the repo
+Real credentials for the external services (OpenRouteService, SMTP) are not in the repo
 — request them from kontakt@allerleih.org if you need to exercise those features against real
 providers.
 
@@ -248,8 +248,6 @@ service/deployment config in production. The full reference table is in
 | Variable                                 | Required                  | Default                      | Purpose                                                                                                                                                                          |
 | ---------------------------------------- | ------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ORS_API_KEY`                            | **yes, for travel times** | —                            | OpenRouteService key used by the `/api/travel-times` hook. **Without it travel times silently stop working** (ORS rejects every request); the hook logs an error on each attempt. |
-| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | for Web Push              | —                            | VAPID keypair for push notifications.                                                                                                                                            |
-| `VAPID_SUBJECT`                          | no                        | `mailto:allerleih@posteo.de` | VAPID subject (mailto: or https: URI).                                                                                                                                           |
 | `LOG_LEVEL`                              | no                        | `4`                          | Log verbosity: 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR.                                                                                                                                 |
 | `DRY_MODE`                               | no                        | `false`                      | When `true`, suppresses side effects such as outbound email (and skips the integration cron fetches/writes).                                                                      |
 | `MAIL_THROTTLE_MINUTES`                  | no                        | `15`                         | Max one notification email per recipient within this window.                                                                                                                     |
@@ -262,6 +260,10 @@ service/deployment config in production. The full reference table is in
 > **Note:** travel-time computation moved from the frontend into this backend hook, so
 > `ORS_API_KEY` must be present **here** (the frontend still needs its own `ORS_API_KEY` for
 > address autocomplete via `/api/geocode`).
+
+> **Web push is not configured in this repo.** The VAPID keypair and subject belong to the
+> SvelteKit frontend's environment (see `share-mvp`'s `README.md` / `.env.example`); this backend
+> only stores and prunes `push_subscriptions` rows.
 
 ---
 
@@ -419,12 +421,11 @@ In-app and push notifications are independent of these email rules.
 │   │                          #   contact, travel, legal, lending, notification, retention,
 │   │                          #   metrics, digest, mail_config, auth_mail_templates, …
 │   ├── services/              # business logic (account.js, group.js, legal.js, mail.js,
-│   │                          #   notification.js)
-│   ├── integrations/          # partner-catalogue refresh port (leihbackend, WINBIAP)
-│   ├── jobs/                  # cron job bodies (retention.js, integrationSync.js)
-│   ├── utils/                 # shared helpers (common.js, email.js, db.js)
-│   ├── routes/                # placeholder — routes are registered in the *.pb.js files
-│   └── views/                 # HTML email templates (layout.html + mail/)
+│   │                          #   notification.js, syncConfig.js, unsubscribe.js)
+│   ├── integrations/          # partner-catalogue sync/refresh port (leihbackend, WINBIAP)
+│   ├── jobs/                  # cron job bodies (retention.js, digest.js, metrics.js)
+│   ├── utils/                 # shared helpers (common.js, email.js, db.js, urls.js, htmlToText.js)
+│   └── views/                 # HTML email templates (layout.html + mail/) + unsubscribe.html
 ├── pb_migrations/             # schema migrations, applied in filename order on every serve
 ├── pb_public/                 # static assets served by PocketBase
 ├── tests/                     # *.test.mjs integration tests + harness.mjs

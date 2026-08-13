@@ -70,8 +70,8 @@ pb_hooks/                    # custom server logic (auto-loaded JS), one file pe
 │                                 #   siteBase — backend vs. frontend origin), htmlToText.js (#607: mail plaintext)
 ├── views/                        # email HTML templates (layout.html + mail/); unsubscribe.html (#607: the
 │                                 #   standalone confirmation page, NOT a mail template)
-├── jobs/                         # cron job bodies: retention.js, digest.js (#607, extracted from digest.pb.js)
-├── routes/                       # placeholder — routes currently live in *.pb.js
+└── jobs/                         # cron job bodies: retention.js, digest.js (#607, extracted from digest.pb.js),
+                                  #   metrics.js (registered in metrics.pb.js)
 pb_migrations/               # <timestamp>_<description>.js — schema, applied in filename order
 pb_public/                   # static assets served by PocketBase
 tests/                       # *.test.mjs integration tests + harness.mjs
