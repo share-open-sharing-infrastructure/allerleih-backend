@@ -13,7 +13,7 @@
 
 onRecordAfterCreateSuccess((e) => {
     const { DRY_MODE, MAIL_THROTTLE_MINUTES } = require(`${__hooks}/constants.js`)
-    const { sendNotificationEmail } = require(`${__hooks}/services/mail.js`)
+    const { sendNotificationEmail, renderMailBody } = require(`${__hooks}/services/mail.js`)
 
     if (DRY_MODE) return
 
@@ -114,10 +114,9 @@ onRecordAfterCreateSuccess((e) => {
             return
         }
 
-        // Render the email body from template
-        const body = $template
-            .loadFiles(`${__hooks}/views/mail/new_message.html`)
-            .render({ RECIPIENT_NAME: recipientName, SENDER_NAME: senderName })
+        // Render the email body from template (renderMailBody fills in SITE_URL — the template's
+        // CTA link and unsubscribe-prefs link both need it; see services/mail.js's doc comment).
+        const body = renderMailBody($app, 'new_message', { RECIPIENT_NAME: recipientName, SENDER_NAME: senderName })
 
         sendNotificationEmail($app, {
             to: recipientEmail,
