@@ -6,8 +6,11 @@ description: Scaffold a new PocketBase migration file in pb_migrations/ with the
 # Scaffold a new PocketBase migration
 
 PocketBase applies every file in `pb_migrations/` **in filename order** on `./pocketbase serve`,
-tracking applied ones in `pb_data/pb_migrations.json`. A new migration must therefore (a) sort
-*after* all existing ones and (b) ship a working `down()` so it can be reverted.
+recording the applied ones in the internal `_migrations` table inside `pb_data/data.db` (there is no
+JSON ledger — inspect it with
+`sqlite3 "file:pb_data/data.db?mode=ro" "SELECT file FROM _migrations ORDER BY file;"`). A new
+migration must therefore (a) sort *after* all existing ones and (b) ship a working `down()` so it
+can be reverted.
 
 ## Step 1 — generate the timestamp prefix
 

@@ -17,9 +17,8 @@
  */
 
 const { findBlockingLoans, anonymizeAccount } = require(`${__hooks}/services/account.js`)
-const { sendNotificationEmail } = require(`${__hooks}/services/mail.js`)
+const { sendNotificationEmail, renderMailBody } = require(`${__hooks}/services/mail.js`)
 const { now, daysAgoIso, shiftDaysIso, monthsAfterIso } = require(`${__hooks}/utils/common.js`)
-const { siteBase } = require(`${__hooks}/utils/urls.js`)
 const {
     DRY_MODE,
     ADMIN_NOTIFY_EMAIL,
@@ -134,9 +133,7 @@ function notifyInactiveSkipped(app, userRecord, loanCount) {
     if (DRY_MODE) return
 
     try {
-        const body = $template
-            .loadFiles(`${__hooks}/views/mail/retention_skipped_user.html`)
-            .render({ USERNAME: userRecord.get('username') })
+        const body = renderMailBody(app, 'retention_skipped_user', { USERNAME: userRecord.get('username') })
         sendNotificationEmail(app, {
             to: userRecord.email(),
             subject: 'Dein AllerLeih-Konto: Löschung wegen offener Ausleihe verschoben',
@@ -151,9 +148,11 @@ function notifyInactiveSkipped(app, userRecord, loanCount) {
         return
     }
     try {
-        const adminBody = $template
-            .loadFiles(`${__hooks}/views/mail/retention_skipped_admin.html`)
-            .render({ USERNAME: userRecord.get('username'), USER_ID: userRecord.id, LOAN_COUNT: loanCount })
+        const adminBody = renderMailBody(app, 'retention_skipped_admin', {
+            USERNAME: userRecord.get('username'),
+            USER_ID: userRecord.id,
+            LOAN_COUNT: loanCount,
+        })
         sendNotificationEmail(app, {
             to: ADMIN_NOTIFY_EMAIL,
             subject: 'AllerLeih: inaktives Konto wegen offener Ausleihe übersprungen',
@@ -203,14 +202,11 @@ function warnInactiveAccounts(app, warnCutoffIso) {
                 // possible deletion at that point is the next nightly run.
                 const deletionDate = germanDate(deletionIso < now() ? shiftDaysIso(now(), 1) : deletionIso)
                 if (!DRY_MODE) {
-                    const body = $template
-                        .loadFiles(`${__hooks}/views/mail/retention_warning_user.html`)
-                        .render({
-                            USERNAME: user.get('username'),
-                            DELETION_DATE: deletionDate,
-                            MONTHS: INACTIVE_MONTHS,
-                            SITE_URL: siteBase(app),
-                        })
+                    const body = renderMailBody(app, 'retention_warning_user', {
+                        USERNAME: user.get('username'),
+                        DELETION_DATE: deletionDate,
+                        MONTHS: INACTIVE_MONTHS,
+                    })
                     sendNotificationEmail(app, {
                         to: user.email(),
                         subject: `Dein AllerLeih-Konto wird am ${deletionDate} gelöscht`,

@@ -32,7 +32,7 @@
  * recipient recomputing them.
  */
 
-const { sendNotificationEmail, KIND_BULK } = require(`${__hooks}/services/mail.js`)
+const { sendNotificationEmail, renderMailBody, KIND_BULK } = require(`${__hooks}/services/mail.js`)
 const { unsubscribeUrl } = require(`${__hooks}/services/unsubscribe.js`)
 const { assetBase, siteBase } = require(`${__hooks}/utils/urls.js`)
 const { DIGEST_PACING_MS, DIGEST_BATCH_SIZE, DIGEST_BATCH_PAUSE_MS } = require(`${__hooks}/constants.js`)
@@ -310,9 +310,12 @@ function runWeeklyDigest(app) {
     const { users, usersById, ownerNames, emailOptedOut, digestOptedOut, userGroups } = inputs
 
     // #607 review S2b: resolved ONCE per run, not once per renderItemList()/template call (up to
-    // 5x per recipient before this fix).
+    // 5x per recipient before this fix). `bases` is bound once here too (not rebuilt per
+    // recipient) and passed to renderMailBody() as its `bases` override below, so that helper
+    // doesn't re-resolve them via siteBase()/assetBase() on every recipient either.
     const asset = assetBase(app)
     const site = siteBase(app)
+    const bases = { SITE_URL: site, ASSET_URL: asset }
 
     // #607 review N3: inlined directly (single call site) rather than via a `newMailClient(app)`
     // wrapper in services/mail.js — that wrapper was a bare `return app.newMailClient()` with no
@@ -363,13 +366,17 @@ function runWeeklyDigest(app) {
         const groupHtml = renderItemList(asset, site, groupItems, 5, ownerNames, false)
         const publicHtml = renderItemList(asset, site, publicItems, 5, ownerNames, true)
 
-        const body = $template.loadFiles(`${__hooks}/views/mail/weekly_digest.html`).render({
-            RECIPIENT_NAME: username,
-            TRUSTED_ITEMS_HTML: trustedHtml,
-            GROUP_ITEMS_HTML: groupHtml,
-            PUBLIC_ITEMS_HTML: publicHtml,
-            SITE_URL: site,
-        })
+        const body = renderMailBody(
+            app,
+            'weekly_digest',
+            {
+                RECIPIENT_NAME: username,
+                TRUSTED_ITEMS_HTML: trustedHtml,
+                GROUP_ITEMS_HTML: groupHtml,
+                PUBLIC_ITEMS_HTML: publicHtml,
+            },
+            bases
+        )
 
         try {
             sendNotificationEmail(app, {

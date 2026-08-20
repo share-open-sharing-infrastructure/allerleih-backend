@@ -64,12 +64,19 @@ pb_hooks/                    # custom server logic (auto-loaded JS), one file pe
 ├── digest.pb.js                  # #607: weekly_digest cron registration + guarded test route (jobs/digest.js)
 ├── unsubscribe.pb.js             # #607: GET/POST /api/unsubscribe/{purpose}/{token} — one-click digest unsubscribe
 ├── services/                     # shared business logic: account.js, group.js, legal.js, notification.js,
-│                                 #   mail.js, syncConfig.js (used only by the historical backfill migration),
+│                                 #   mail.js — renderMailBody() is the ONLY sanctioned way to render a
+│                                 #   views/mail/*.html body: layout.html's `{{raw .CONTENT}}` never
+│                                 #   re-resolves placeholders, so a body template's own {{.SITE_URL}}/
+│                                 #   {{.ASSET_URL}} gets nothing unless this helper supplies it,
+│                                 #   syncConfig.js (used only by the historical backfill migration),
 │                                 #   unsubscribe.js (#607: HMAC token verify/apply + the confirmation page render)
 ├── utils/                        # common.js, email.js (normalizeEmail, #557), db.js, urls.js (#607: assetBase/
 │                                 #   siteBase — backend vs. frontend origin), htmlToText.js (#607: mail plaintext)
-├── views/                        # email HTML templates (layout.html + mail/); unsubscribe.html (#607: the
-│                                 #   standalone confirmation page, NOT a mail template)
+├── views/                        # email HTML templates (layout.html + mail/) — render any mail/*.html
+│                                 #   ONLY via services/mail.js's renderMailBody(), never a raw
+│                                 #   $template.loadFiles() call (see that function's doc comment);
+│                                 #   unsubscribe.html (#607: the standalone confirmation page, NOT a mail
+│                                 #   template — buildMessage()/renderMailBody() don't apply to it)
 └── jobs/                         # cron job bodies: retention.js, digest.js (#607, extracted from digest.pb.js),
                                   #   metrics.js (registered in metrics.pb.js)
 pb_migrations/               # <timestamp>_<description>.js — schema, applied in filename order

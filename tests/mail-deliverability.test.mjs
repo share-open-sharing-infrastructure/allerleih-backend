@@ -69,6 +69,21 @@ test('new-message mail: multipart/alternative, non-empty text/plain, no List-Uns
 	// #607 B1: the logo path must be ASSET_URL + "/AllerLeih.png" — exactly one separating slash.
 	assert.match(html, new RegExp(`${APP_URL}/AllerLeih\\.png`))
 	assert.ok(!html.includes(`${APP_URL}//AllerLeih.png`), 'logo URL must not have a doubled slash')
+
+	// Regression: new_message.html's CTA button + "Benachrichtigungen anpassen" link both use
+	// {{.SITE_URL}}, but buildMessage() only ever injects SITE_URL into views/layout.html — the
+	// body is spliced in via `{{raw .CONTENT}}`, which does NOT re-resolve placeholders. The
+	// notification.pb.js call site used to render new_message.html without SITE_URL at all, so
+	// both links silently fell back to a bare relative href (mail clients resolve
+	// href="/conversations" to http://conversations/, not the app). Fixed via renderMailBody()
+	// (services/mail.js), which always injects SITE_URL/ASSET_URL.
+	assert.match(html, new RegExp(`href="${FRONTEND_URL}/conversations"`), 'CTA link must be absolute via FRONTEND_URL')
+	assert.ok(!html.includes('href="/conversations"'), 'CTA link must never render as a bare relative href')
+	assert.match(
+		html,
+		new RegExp(`href="${FRONTEND_URL}/user/profile#benachrichtigungen"`),
+		'"Benachrichtigungen anpassen" link must also be absolute via FRONTEND_URL'
+	)
 })
 
 test('weekly digest mail: multipart/alternative, List-Unsubscribe (One-Click), Precedence: bulk, digest sender identity', async () => {
