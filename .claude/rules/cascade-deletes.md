@@ -30,3 +30,11 @@ Note the same DB-level caveat for **`trusts` edges on account deletion**: the `t
 `deleted=true`), so the cascade never fires. `anonymizeAccount` (`services/account.js`) therefore
 deletes the account's trust edges explicitly, in both directions
 (`deleteByFilter('trusts', 'truster = {:u} || trustee = {:u}')`).
+
+## The open-loan guard is a frontend mirror
+
+The open-loan guard (`BLOCKING_LOAN_FILTER` in `services/account.js`) is a **deliberate mirror**
+of `ACTIVE_LENDING_STATES` from the frontend's `src/lib/lending.ts` (share-mvp) — `accepted` /
+`active` / `return_requested`, intentionally **without** `pending` (a mere request must not block
+deletion). Separate repos, no shared package: a lending-status change on the frontend
+(`$lib/lending.ts`) **must** be carried over to this filter (and its comment) in the same effort.

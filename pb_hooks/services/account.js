@@ -16,6 +16,11 @@ const { now } = require(`${__hooks}/utils/common.js`)
 
 // Lending states in which a loan is still in flight — deleting an account while one
 // of these is open would strand the counterparty, so deletion is refused.
+//
+// Deliberate mirror of ACTIVE_LENDING_STATES in share-mvp's src/lib/lending.ts —
+// deliberately WITHOUT `pending`: a mere request must not block deletion. Separate
+// repos, no shared package (hooks run in Goja and cannot import frontend TS), so a
+// lending-status change there MUST be carried over here in the same effort.
 const BLOCKING_LOAN_FILTER =
     '(requester = {:u} || itemOwner = {:u}) && ' +
     '(lendingStatus = "accepted" || lendingStatus = "active" || lendingStatus = "return_requested")'
