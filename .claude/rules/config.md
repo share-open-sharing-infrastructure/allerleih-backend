@@ -11,7 +11,6 @@ All env/config is centralized here; most have safe defaults:
 | Export | Env var | Default | Purpose |
 |---|---|---|---|
 | `LOG_LEVEL` | `LOG_LEVEL` | `4` | 1=DEBUG … 4=ERROR |
-| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | `VAPID_*` | — / `mailto:allerleih@posteo.de` | Web-push |
 | `DRY_MODE` | `DRY_MODE` | `false` | When `true`, skips sending email/notifications (local dev) |
 | `MAIL_THROTTLE_MINUTES` | `MAIL_THROTTLE_MINUTES` | `15` | Max one notification email per user per N minutes |
 | `FRONTEND_URL` | `FRONTEND_URL` | `''` | SvelteKit frontend origin (no trailing slash) — host for the `users` auth-mail links (#447) and the `APP_URL` fallback. **#487 Phase 3: no longer used by the integrations** (they run locally; `SYNC_SECRET` is gone) |
@@ -34,5 +33,9 @@ All env/config is centralized here; most have safe defaults:
 | `UNSUBSCRIBE_SECRET` | `UNSUBSCRIBE_SECRET` | — (derived) | #607: HMAC secret signing the stateless one-click digest-unsubscribe tokens (`services/unsubscribe.js`). Empty → derived from the `users` collection's `authToken.secret` (logged as unavailable, never the value). Set an explicit secret in production so rotating the auth-token secret doesn't invalidate every unsubscribe link already sent |
 | `DIGEST_PACING_MS` / `DIGEST_BATCH_SIZE` / `DIGEST_BATCH_PAUSE_MS` | same | `200` / `50` / `5000` | #607: anti-burst pacing for the weekly digest — `sleep()` between sends, plus a longer pause every `DIGEST_BATCH_SIZE` sends. `0` disables the corresponding pause. A courtesy to the receiving mail server, not a rate limit; see `jobs/digest.js` |
 
-Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so push,
-geocoding, and email don't work for real.
+Also expected at runtime: `ORS_API_KEY` (travel-times). Locally these are dummy values, so
+geocoding and email don't work for real.
+
+Web push is deliberately **not** configured here — the VAPID keypair/subject live only in the
+SvelteKit frontend's environment (`src/lib/server/notifications.ts`); this backend merely stores
+and prunes `push_subscriptions` rows.

@@ -4,7 +4,7 @@
  * Central configuration — all environment variables and constants in one place.
  *
  * Usage in other hook files:
- *   const { LOG_LEVEL, VAPID_PRIVATE_KEY } = require(`${__hooks}/constants.js`)
+ *   const { LOG_LEVEL, DRY_MODE } = require(`${__hooks}/constants.js`)
  */
 
 /** Integer env var with fallback — parseInt alone yields NaN on non-numeric garbage. */
@@ -16,10 +16,12 @@ function intEnv(name, fallback) {
 /** Log verbosity: 1=DEBUG, 2=INFO, 3=WARN, 4=ERROR */
 const LOG_LEVEL = intEnv('LOG_LEVEL', 4)
 
-/** VAPID keys for Web Push notifications */
-const VAPID_PUBLIC_KEY = $os.getenv('VAPID_PUBLIC_KEY') || ''
-const VAPID_PRIVATE_KEY = $os.getenv('VAPID_PRIVATE_KEY') || ''
-const VAPID_SUBJECT = $os.getenv('VAPID_SUBJECT') || 'mailto:allerleih@posteo.de'
+/**
+ * NOTE: no VAPID / Web-Push config here on purpose. Web push is signed and sent exclusively by
+ * the SvelteKit frontend (`src/lib/server/notifications.ts`, `$env/static/private`); this
+ * backend only stores and cleans up the `push_subscriptions` rows. Do not re-add `VAPID_*` — it
+ * would be dead config and a second source of truth for the operator to get wrong.
+ */
 
 /**
  * OpenRouteService API key — required by the /api/travel-times hook, which
@@ -36,7 +38,7 @@ const DRY_MODE = $os.getenv('DRY_MODE') === 'true'
 const MAIL_THROTTLE_MINUTES = intEnv('MAIL_THROTTLE_MINUTES', 15)
 
 /**
- * SvelteKit frontend origin (no trailing slash), e.g. "https://allerleih.org".
+ * SvelteKit frontend origin (no trailing slash), e.g. "https://leihen.example.org".
  * Kept for the #447 auth-mail links (host of the `users` verification/reset URLs) and as the
  * `APP_URL` fallback — see auth_mail_templates.pb.js + mail_config.pb.js. It is NO LONGER used for
  * integration sync (#487 Phase 3 moved sync/refresh + the CSV write path fully into the backend).
@@ -148,9 +150,6 @@ const DIGEST_BATCH_PAUSE_MS = intEnv('DIGEST_BATCH_PAUSE_MS', 5000)
 
 module.exports = {
     LOG_LEVEL,
-    VAPID_PUBLIC_KEY,
-    VAPID_PRIVATE_KEY,
-    VAPID_SUBJECT,
     ORS_API_KEY,
     DRY_MODE,
     MAIL_THROTTLE_MINUTES,
