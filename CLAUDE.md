@@ -33,6 +33,9 @@ npm test                                 # node --test, runs tests/*.test.mjs se
   They run serially (`--test-concurrency=1`) because each owns the server.
 - For personal local settings (custom ports, local superuser creds) that shouldn't be shared with
   the team, use a gitignored `CLAUDE.local.md` at the repo root — it loads alongside this file.
+- Besides the bare binary above, an official multi-stage Docker image exists (#55) — see
+  README.md → "Run with Docker (self-hosting)" for `docker run`/first-superuser/backup recipes
+  and `.claude/rules/docker.md` for the facts behind its `Dockerfile`.
 
 ## Repository structure
 
@@ -83,6 +86,9 @@ pb_migrations/               # <timestamp>_<description>.js — schema, applied 
 pb_public/                   # static assets served by PocketBase
 tests/                       # *.test.mjs integration tests + harness.mjs
 pb_data/                     # live DB + uploads (gitignored, created on first serve)
+Dockerfile                   # official multi-stage image (#55): pb_hooks + pb_migrations + pb_public + a pinned PocketBase binary
+.dockerignore                # build-context denylist for the image above
+.github/workflows/           # ci.yml = Uberspace deploy, docker-publish.yaml = GHCR image (#55)
 ```
 
 ## CRITICAL: hook files run in isolated contexts — `require()` inside the handler
@@ -209,6 +215,7 @@ when working in this repo alone.
 | Auth-mail templates | `.claude/rules/auth-mail.md` |
 | Integration sync cron jobs | `.claude/rules/integration-sync.md` |
 | Full env var / `constants.js` reference | `.claude/rules/config.md` |
+| The official Docker image (`Dockerfile`, `.dockerignore`, `docker-publish.yaml`) | `.claude/rules/docker.md`; README.md → "Run with Docker (self-hosting)" |
 
 ## Keeping this file in sync
 
