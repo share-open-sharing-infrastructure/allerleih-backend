@@ -25,7 +25,7 @@ This project uses PocketBase's **"Zero-Go, JavaScript Hooks"** approach:
 
 | What              | Version / note                                                                                                                                                                                |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PocketBase**    | The official binary, downloaded in step 2 — **not** committed to the repo. Known-good: **v0.39.4**.                                                                                           |
+| **PocketBase**    | The official binary, downloaded in step 2 — **not** committed to the repo. Known-good: **v0.39.11**.                                                                                          |
 | **Node.js**       | **25.2.1** — only needed to run the integration test suite (`npm test`); the server itself doesn't use Node. Match the version the frontend repo's CI pins.                                   |
 | **A POSIX shell** | The test harness spawns `./pocketbase` and the frontend's `scripts/dev-stack.sh` is bash. On **Windows, use WSL** — with a native `pocketbase.exe` the test harness will not find the binary. |
 | **git**           | Any recent version.                                                                                                                                                                           |
@@ -157,6 +157,135 @@ npx prettier --write pb_hooks tests               # format (config lives in pack
 
 ---
 
+## Run with Docker (self-hosting)
+
+An official multi-stage image is built by `.github/workflows/docker-publish.yaml` and published
+to GHCR as `ghcr.io/share-open-sharing-infrastructure/allerleih-backend`. It is an **additional**
+distribution channel, not a replacement for the Uberspace deploy above — see the
+[Dockerfile](Dockerfile) for the build itself.
+
+**Never expose port 8090 directly to the internet.** PocketBase speaks plain HTTP with no TLS of
+its own, and this API/admin surface carries everything: superuser login (`/_/`), auth-mail
+confirmation links, session tokens, and — per each collection's own rules — email addresses,
+coordinates and message content. Put a TLS-terminating reverse proxy (Caddy, nginx, Traefik, …) in
+front of it and bind the container to localhost only, as below:
+
+```bash
+docker volume create pb_data
+docker run -d \
+  --name allerleih-backend \
+  -p 127.0.0.1:8090:8090 \
+  -v pb_data:/app/pb_data \
+  --env-file .env \
+  ghcr.io/share-open-sharing-infrastructure/allerleih-backend:latest
+```
+
+### First superuser
+
+Either against the running container:
+
+```bash
+docker exec allerleih-backend /app/pocketbase superuser upsert you@example.com yourpassword
+```
+
+…or without a running server at all, which avoids any SQLite-lock risk on a fresh volume:
+
+```bash
+docker run --rm -v pb_data:/app/pb_data \
+  ghcr.io/share-open-sharing-infrastructure/allerleih-backend:latest \
+  superuser upsert you@example.com yourpassword
+```
+
+The absolute `/app/pocketbase` path matters — the binary is not on `PATH` and there is
+deliberately no convenience symlink for it (see `.claude/rules/docker.md`). Afterwards, the admin
+UI is reachable at `https://<host>/_/` — through the reverse proxy from above, never directly at
+port 8090.
+
+### Migrations
+
+Every `pb_migrations/` file applies automatically, in filename order, on **every** container
+start — restarting with a newer image (and thus a newer `PB_VERSION`/schema) migrates the
+existing volume in place. **Back up `pb_data` first** (see below). The image's `CMD` passes
+`--automigrate=0`, but that does **not** mean migrations stop applying — it only means an
+admin-UI schema edit no longer tries to write a migration file into the image's read-only
+`/app/pb_migrations`; a real schema change still belongs in a reviewed PR that adds one.
+
+### Backup
+
+`pb_data/` — the SQLite database plus file uploads — is the entire mutable state. Either:
+
+- use PocketBase's own backups (admin UI, or `POST /api/backups`) — a consistent snapshot taken
+  while the server is running, or
+- stop the container and copy the volume:
+
+  ```bash
+  docker run --rm -v pb_data:/data -v "$PWD":/out alpine \
+    tar czf /out/pb_data.tgz -C /data .
+  ```
+
+Don't put `pb_data` on NFS/CIFS — SQLite needs real file locking. Copying the live database file
+directly while the server keeps running, without a WAL checkpoint, can capture an inconsistent
+snapshot; prefer one of the two options above.
+
+### Configuration
+
+All configuration is process **environment** (`-e` / `--env-file` / your orchestrator's secret
+store) — PocketBase does not load a `.env` file. The full variable reference is in
+[`.claude/rules/config.md`](.claude/rules/config.md) and the [Environment variables](#environment-variables)
+section below; this is only a container-specific summary, not a second copy of that table:
+
+- **Practically required, or a feature goes silently dead:** `ORS_API_KEY` (travel times),
+  `FRONTEND_URL` (auth-mail links, `siteBase()`), `APP_URL` — set this explicitly in a container;
+  without it PocketBase falls back to its own default `http://localhost:8090`, which breaks the
+  mail-logo image and the digest-unsubscribe link in every outgoing email since neither host is
+  reachable from a recipient's mail client. Add `SMTP_*`/`SENDER_*` for real outbound mail,
+  `UNSUBSCRIBE_SECRET` (`openssl rand -hex 32`) so digest-unsubscribe links survive an auth-token
+  rotation, and optionally `SYNC_CRON`/`REFRESH_CRON`, `RETENTION_*`, `LOG_LEVEL`, `DRY_MODE`.
+- **Never set in production:** `DIGEST_TEST_ROUTE` / `METRICS_TEST_ROUTE` / `RETENTION_TEST_ROUTE`
+  (each opens a guarded test-only route) and `INTEGRATION_ALLOW_INSECURE_URL` (disables the
+  integration refresh's SSRF guard).
+- **Cron always runs in UTC**, independent of `TZ` — `TZ` only affects log timestamp readability,
+  exactly like today's Uberspace deploy, so this is not a behavior change.
+
+### Tags
+
+Pin a specific tag (`:sha-<commit>` or `:v<version>`) rather than `:latest` outside of a quick
+trial — see the tags on the
+[package page](https://github.com/orgs/share-open-sharing-infrastructure/packages/container/package/allerleih-backend).
+Note the version-pin split: the image's `PB_VERSION` (currently **v0.39.11**) is a deliberately
+pinned, reproducible build; the Uberspace deploy in `ci.yml` instead pulls whatever is
+`releases/latest` at deploy time. Expect the two to diverge between PocketBase releases.
+
+### Non-root process, bind mounts
+
+The process runs as uid/gid **1001** (user `pocketbase`), never root. A named volume (as in the
+example above) is chowned automatically on first use. A **bind mount** is not:
+
+```bash
+mkdir -p pb_data
+sudo chown 1001:1001 pb_data
+docker run -d -v "$PWD/pb_data:/app/pb_data" … ghcr.io/share-open-sharing-infrastructure/allerleih-backend:latest
+```
+
+Skipping the `chown` fails to open the database on a host-owned (typically root-owned) directory.
+
+### Frontend + `docker compose`
+
+The SvelteKit frontend's browser talks to PocketBase **directly** (never proxied through the
+frontend server), so this image's PocketBase URL must be publicly reachable — over HTTPS, via the
+reverse proxy from above, not raw port 8090 — and the frontend's `PUBLIC_PB_URL` must point at it
+**with a trailing slash** (image URLs are built as
+`${PUBLIC_PB_URL}api/files/…`). A ready-made `docker compose` setup that wires both containers
+together is tracked separately in
+[share-mvp#630](https://github.com/share-open-sharing-infrastructure/share-mvp/issues/630) — not
+part of this image.
+
+Finally: `pocketbase update` (the built-in self-updater) does not work in this image and is not
+meant to — the binary is root-owned and the process runs as a non-root user by design. Update by
+pulling a newer image tag instead.
+
+---
+
 ## Testing
 
 Integration tests live in `tests/` and run against a **real, throwaway PocketBase instance** —
@@ -222,6 +351,11 @@ Conventions for adding tests are in `.claude/skills/write-tests`.
 PocketBase release, rsyncs `pb_hooks/`, `pb_migrations/` and `pb_public/` to the Uberspace host,
 rewrites the supervisord service (env vars come from GitHub secrets/variables), restarts
 PocketBase and health-checks it.
+
+A second workflow, `.github/workflows/docker-publish.yaml` (#55), builds and publishes the
+official Docker image (see [Run with Docker](#run-with-docker-self-hosting) above). It only runs
+on a PR when the diff touches `Dockerfile`, `.dockerignore` or the workflow itself — i.e. normally
+just a PocketBase-version-bump PR — is **not** a required check, and does not replace `npm test`.
 
 **There is no PR-triggered test workflow in this repo** — nothing runs `npm test` for you. Run
 it locally before opening a PR, and if the change touches `pb_migrations/`, confirm it applies
@@ -413,6 +547,10 @@ In-app and push notifications are independent of these email rules.
 
 ```
 .
+├── Dockerfile                 # official multi-stage image (#55) — fetch stage + minimal runtime
+├── .dockerignore              # build-context denylist for the image above
+├── .github/workflows/         # ci.yml (Uberspace deploy) + docker-publish.yaml (GHCR image)
+├── LICENSE                    # AGPL-3.0-only
 ├── package.json               # test script + Prettier config only — nothing to install
 ├── pb_hooks/                  # server-side JavaScript hooks, one file per domain area
 │   ├── main.pb.js             # bootstrap + log interception

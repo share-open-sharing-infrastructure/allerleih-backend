@@ -1,0 +1,31 @@
+# Docker build context denylist (#55). The image's contents are already fully determined by the
+# Dockerfile's three explicit COPYs (pb_hooks/, pb_migrations/, pb_public/) — this file exists for
+# two other reasons: (a) build-context size (a local pb_data/ can be many GB, and the local
+# ./pocketbase binary alone is ~30 MB and would get re-uploaded to the daemon on every build), and
+# (b) never letting local secrets or repo metadata into a build context, even though none of it is
+# actually COPYed in.
+
+pb_data/
+pb_diag_data/
+pb_test_data/
+pocketbase
+pocketbase.exe
+tests/
+node_modules/
+.git/
+.github/
+.claude/
+
+# `env` is a gitignored root-level file for local secrets (see .gitignore); .env/.env.* cover the
+# more conventional naming. CLAUDE.local.md is this repo's own gitignored spot for personal local
+# overrides (see CLAUDE.md) — same risk, same treatment.
+.env
+.env.*
+env
+CLAUDE.local.md
+
+package.json
+package-lock.json
+README.md
+CLAUDE.md
+.gitignore
