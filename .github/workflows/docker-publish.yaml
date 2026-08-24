@@ -1,0 +1,204 @@
+name: Docker image
+
+# Builds and (on push/tag/dispatch) publishes the official backend image to GHCR (#55).
+#
+# IMAGE_NAME is the explicit `ghcr.io/share-open-sharing-infrastructure/allerleih-backend` rather
+# than `ghcr.io/${{ github.repository }}` — symmetric to the frontend's own
+# `ghcr.io/share-open-sharing-infrastructure/allerleih-frontend` (share-mvp#628), which uses the
+# same explicit-name reasoning for its own historical repo name.
+#
+# Coexistence with ci.yml: this is a separate workflow/job with no shared concurrency group and no
+# shared secrets (only the ambient `secrets.GITHUB_TOKEN`, scoped to `packages: write`, no
+# production access). On a push to `main`, ci.yml's Uberspace deploy and this image publish run in
+# parallel and independently — a red image build never blocks the deploy, and vice versa.
+#
+# Version-pin note: ci.yml's deploy step downloads `releases/latest` on every run (the rolling
+# channel matching what's on Uberspace today); this image instead pins the version in the
+# Dockerfile's `ARG PB_VERSION` — the reproducible channel. The two are expected to diverge
+# between PocketBase releases; see README.md → "Run with Docker (self-hosting)".
+#
+# On pull requests this workflow only builds (amd64-only, no push) as a Dockerfile-validity check,
+# plus a smoke test against the acceptance criteria in #55 — see the paths filter below for why
+# this rarely actually runs on a PR.
+
+env:
+  IMAGE_NAME: ghcr.io/share-open-sharing-infrastructure/allerleih-backend
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+    # Narrow on purpose: unlike the frontend, this backend has no build step, so a pb_hooks/ or
+    # pb_migrations/ diff never changes whether the image builds — only these three files can.
+    # Scoping to them means the PR job normally only runs on the rare PocketBase-version-bump PR,
+    # not on every routine backend change, so it never becomes a de facto (unintended) PR-CI gate.
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - '.github/workflows/docker-publish.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-publish-${{ github.event.pull_request.number || github.ref }}
+  # Only the PR-validation build should be cancellable — cancelling a push-to-main run mid-build
+  # would silently drop that commit's `type=sha` tag from GHCR.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    # Skip on fork PRs (mirrors the other PR workflows); still runs on manual dispatch.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # QEMU is only needed to cross-build the arm64 layer, which only happens on the publish
+      # path — the PR validation build stays amd64-only and native, so it can skip this entirely.
+      - name: Set up QEMU
+        if: github.event_name != 'pull_request'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=pr
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          # `load: true` only works for a single-platform build, hence PR builds staying
+          # amd64-only above — this is also why the smoke test below needs the deterministic
+          # `type=ref,event=pr` tag rather than trying to guess an image id.
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          # cache-to only outside the PR path: the PR job only validates the Dockerfile and never
+          # pushes, and a GHA cache written from a PR run is scoped to that PR's ref anyway (GitHub
+          # Actions cache scoping), so writing one would just spend cache-write quota for a cache
+          # nothing else can read. Deliberate deviation from the frontend's docker-publish
+          # workflow, which sets this unconditionally — the frontend's PR path has no such
+          # build-only-vs-publish asymmetry. Empty string disables this build-push-action input.
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
+          # No SLSA provenance attestation: it would add a second, unlisted manifest-list entry
+          # that `docker run`/most local tooling doesn't need for a self-hosted image, and keeps
+          # `docker image inspect` output simple for the self-hosting audience this image targets.
+          provenance: false
+
+      # PR-only: exercises the exact acceptance criteria from #55 against the image this job just
+      # built locally (`load: true` above). Loaded locally, so plain `docker run` by tag works —
+      # no need to resolve a digest.
+      - name: Smoke test (PR only)
+        if: github.event_name == 'pull_request'
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Shared failure path: log why, dump the container's own logs for debugging, fail the
+          # job. Keeps every check below to one line instead of a repeated echo/docker-logs/exit
+          # block.
+          fail() {
+            echo "::error::$1"
+            docker logs pb-smoke
+            exit 1
+          }
+
+          docker volume create pb_data_smoke
+          docker run -d --name pb-smoke -p 8090:8090 -v pb_data_smoke:/app/pb_data "$IMAGE"
+
+          # Poll /api/health instead of a fixed sleep: first boot applies every migration in
+          # pb_migrations/, and how long that takes depends on the runner, not a constant.
+          healthy=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/api/health >/dev/null 2>&1; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+          [ "$healthy" -eq 1 ] || fail "/api/health never returned 200 within 30s"
+
+          uid="$(docker exec pb-smoke id -u)"
+          [ "$uid" = "1001" ] || fail "expected process to run as uid 1001, got $uid"
+
+          if docker exec pb-smoke sh -c 'command -v curl' >/dev/null 2>&1; then
+            fail "curl binary present in the final image"
+          fi
+
+          # `command -v unzip` would always "succeed" here regardless of whether the package is
+          # installed — Alpine's busybox provides an `unzip` applet either way (see
+          # .claude/rules/docker.md). `apk info -e` queries the package database instead, which
+          # busybox applets never register in; assert on its output being empty rather than its
+          # exit code — verified empirically that `apk info -e` exits 2 when none of the named
+          # packages are installed (the expected case here), 1 when only some are, 0 when all are,
+          # so the `|| true` is required or that exit code would trip `set -e` on the success path.
+          installed="$(docker exec pb-smoke sh -c 'apk info -e curl unzip' || true)"
+          if [ -n "$installed" ]; then
+            fail "unexpected package(s) installed in the final image: $installed"
+          fi
+
+          # Verified empirically (see .claude/rules/docker.md): `serve` only prints migration
+          # progress to stdout in `--dev` mode (`pocketbase serve --help`), which this image's CMD
+          # deliberately does not pass (it would also dump every SQL statement to the log). So
+          # "migrations applied" is checked the same way a caller actually would — the
+          # `items_public` view, itself created and reshaped across many migrations, must exist
+          # and answer with a well-formed list on a completely fresh volume.
+          if ! curl -fsS "http://127.0.0.1:8090/api/collections/items_public/records?perPage=1" \
+              | grep -q '"totalItems"'; then
+            fail "items_public is unreachable — migrations did not apply on a fresh volume"
+          fi
+
+          # `docker image inspect --format '{{.Size}}'` reports the *compressed* content size
+          # under Docker's containerd image store, but the *uncompressed* size under the classic
+          # overlay2 store — which one a given runner uses isn't something this workflow
+          # controls. The 100 MiB ceiling is deliberately generous against either interpretation,
+          # so the assertion holds regardless; the echo below is labelled so the number isn't
+          # mistaken for a fixed "size on disk".
+          size_bytes="$(docker image inspect "$IMAGE" --format '{{.Size}}')"
+          size_mb=$((size_bytes / 1024 / 1024))
+          echo "image size (docker image inspect .Size — compressed or uncompressed depending on the runner's image store): ${size_mb} MiB"
+          if [ "$size_bytes" -gt $((100 * 1024 * 1024)) ]; then
+            fail "image size ${size_mb} MiB exceeds the 100 MiB expectation from #55"
+          fi
+
+      - name: Clean up smoke test resources
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          docker rm -f pb-smoke 2>/dev/null || true
+          docker volume rm pb_data_smoke 2>/dev/null || true
